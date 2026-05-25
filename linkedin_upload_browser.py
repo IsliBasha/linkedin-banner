@@ -25,10 +25,49 @@ BANNER_PATH       = str(Path("banner.png").resolve())
 
 def login(page) -> None:
     print("  → Navigating to LinkedIn login…")
-    page.goto("https://www.linkedin.com/login", wait_until="domcontentloaded")
-    page.fill('input[name="session_key"]',      LINKEDIN_EMAIL)
-    page.fill('input[name="session_password"]', LINKEDIN_PASSWORD)
+    page.goto("https://www.linkedin.com/login", wait_until="networkidle", timeout=30000)
+    page.screenshot(path="debug_login_page.png")
+
+    # Try multiple selector strategies for the email field
+    email_selectors = [
+        'input[name="session_key"]',
+        'input[id="username"]',
+        'input[autocomplete="username"]',
+        'input[type="email"]',
+    ]
+    filled = False
+    for sel in email_selectors:
+        try:
+            page.wait_for_selector(sel, timeout=5000)
+            page.fill(sel, LINKEDIN_EMAIL)
+            filled = True
+            print(f"     ✓ Email field found via: {sel}")
+            break
+        except Exception:
+            continue
+
+    if not filled:
+        page.screenshot(path="debug_login.png")
+        sys.exit(
+            "✗  Could not find email input on login page.\n"
+            "   Screenshot saved to debug_login.png"
+        )
+
+    # Password
+    pass_selectors = [
+        'input[name="session_password"]',
+        'input[id="password"]',
+        'input[type="password"]',
+    ]
+    for sel in pass_selectors:
+        try:
+            page.fill(sel, LINKEDIN_PASSWORD)
+            break
+        except Exception:
+            continue
+
     page.click('button[type="submit"]')
+    page.wait_for_timeout(3000)
 
     try:
         page.wait_for_url(
