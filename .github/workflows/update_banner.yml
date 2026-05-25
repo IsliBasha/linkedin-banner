@@ -8,13 +8,13 @@ on:
 
 # ── Permissions ───────────────────────────────────────────────
 permissions:
-  contents: read             # read repo files only
+  contents: read
 
 jobs:
   update-banner:
     name: Generate & Upload LinkedIn Banner
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
 
     steps:
       # ── 1. Checkout ─────────────────────────────────────────
@@ -32,30 +32,32 @@ jobs:
       - name: Install Python dependencies
         run: pip install -r requirements.txt
 
-      # ── 4. Generate & upload banner ─────────────────────────
-      - name: Generate and upload banner
+      # ── 4. Playwright browser ────────────────────────────────
+      - name: Install Playwright Chromium
+        run: playwright install chromium --with-deps
+
+      # ── 5. Generate banner ───────────────────────────────────
+      - name: Generate banner
         env:
-          # LinkedIn credentials
-          LINKEDIN_ACCESS_TOKEN: ${{ secrets.LINKEDIN_ACCESS_TOKEN }}
-          LINKEDIN_PERSON_URN:   ${{ secrets.LINKEDIN_PERSON_URN }}
-
-          # GitHub credentials
-          # Use a Personal Access Token (classic) with read:user scope.
-          # Store it as GH_TOKEN — do NOT use secrets.GITHUB_TOKEN here
-          # because the built-in runner token cannot query contribution data.
-          GH_TOKEN:              ${{ secrets.GH_TOKEN }}
-          GITHUB_USERNAME:       ${{ secrets.GH_USERNAME }}
-
-          # Banner customisation (optional)
-          PORTFOLIO_URL:         ${{ secrets.PORTFOLIO_URL }}
+          GH_TOKEN:        ${{ secrets.GH_TOKEN }}
+          GITHUB_USERNAME: ${{ secrets.GH_USERNAME }}
+          PORTFOLIO_URL:   ${{ secrets.PORTFOLIO_URL }}
         run: python generate_banner.py
 
-      # ── 5. Persist banner as a build artifact ────────────────
-      # Useful for visual inspection without needing LinkedIn access.
+      # ── 6. Upload to LinkedIn via browser ────────────────────
+      - name: Upload banner to LinkedIn
+        env:
+          LINKEDIN_EMAIL:    ${{ secrets.LINKEDIN_EMAIL }}
+          LINKEDIN_PASSWORD: ${{ secrets.LINKEDIN_PASSWORD }}
+        run: python linkedin_upload_browser.py
+
+      # ── 7. Persist banner as artifact ────────────────────────
       - name: Upload banner artifact
         uses: actions/upload-artifact@v4
-        if: always()                  # upload even when the LinkedIn step fails
+        if: always()
         with:
           name: linkedin-banner-${{ github.run_number }}
-          path: banner.png
+          path: |
+            banner.png
+            debug_*.png
           retention-days: 14

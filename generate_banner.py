@@ -634,11 +634,7 @@ def main() -> None:
     banner.save(OUTPUT_PATH, "PNG", optimize=True)
     print(f"    ✓ Saved → {OUTPUT_PATH}")
 
-    # 4. Upload to LinkedIn
-    print("\n🔗  LinkedIn upload …")
-    upload_to_linkedin(OUTPUT_PATH)
-
-    print("\n✅  Done.")
+    print("\n✅  Banner saved → run linkedin_upload_browser.py to publish.")
 
 
 if __name__ == "__main__":
