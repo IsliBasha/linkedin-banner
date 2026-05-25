@@ -544,46 +544,36 @@ def _put_image_binary(upload_url: str, image_path: str) -> None:
 
 def _patch_profile_background(image_urn: str) -> None:
     """
-    Step 3 — PATCH the LinkedIn profile to set the background cover image.
+    Step 3 — PATCH /v2/me to set the profile background cover image.
 
-    NOTE: Setting the profile background photo via API requires the
-    ``w_member_social`` OAuth scope *and* may require the "Share on
-    LinkedIn" product to be enabled on your LinkedIn Developer App.
-    If you receive a 403, set the background manually:
-        LinkedIn → Me → View Profile → Edit background photo → upload banner.png
+    Uses the backgroundPicture field on the v2 Member Profile API.
+    Requires w_member_social scope.
     """
-    person_id = LINKEDIN_PERSON_URN.split(":")[-1]
-
     payload = {
         "patch": {
             "$set": {
-                "backgroundCoverImages": [
-                    {"originalImage": image_urn}
-                ]
+                "backgroundPicture": {
+                    "com.linkedin.digitalmedia.mediaartifact.StillImage": {
+                        "storageSize":              {"width": 1584, "height": 396},
+                        "storageAspectRatio":       {"formatted": "4.00:1"},
+                        "mediaAvailabilityStatus":  "READY",
+                        "originalImage":            image_urn,
+                    }
+                }
             }
         }
     }
 
-    # Try newer /rest/profiles endpoint first
     resp = requests.patch(
-        f"https://api.linkedin.com/rest/profiles/{person_id}",
-        headers=_li_headers({"Content-Type": "application/json"}),
+        "https://api.linkedin.com/v2/me",
+        headers={
+            "Authorization":             f"Bearer {LINKEDIN_ACCESS_TOKEN}",
+            "X-Restli-Protocol-Version": "2.0.0",
+            "Content-Type":              "application/json",
+        },
         json=payload,
         timeout=20,
     )
-
-    if resp.status_code in (404, 400):
-        # Fall back to legacy /v2/people endpoint
-        resp = requests.patch(
-            "https://api.linkedin.com/v2/people/~",
-            headers={
-                "Authorization":             f"Bearer {LINKEDIN_ACCESS_TOKEN}",
-                "X-Restli-Protocol-Version": "2.0.0",
-                "Content-Type":              "application/json",
-            },
-            json=payload,
-            timeout=20,
-        )
 
     if not resp.ok:
         print(
