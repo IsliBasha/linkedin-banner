@@ -20,6 +20,7 @@ from playwright.sync_api import sync_playwright
 
 LINKEDIN_EMAIL    = os.environ.get("LINKEDIN_EMAIL", "")
 LINKEDIN_PASSWORD = os.environ.get("LINKEDIN_PASSWORD", "")
+LINKEDIN_COOKIE   = os.environ.get("LINKEDIN_COOKIE", "")   # li_at session cookie
 BANNER_PATH       = str(Path("banner.png").resolve())
 
 
@@ -177,8 +178,11 @@ def set_background(page) -> None:
 
 
 def main() -> None:
-    if not LINKEDIN_EMAIL or not LINKEDIN_PASSWORD:
-        sys.exit("✗  LINKEDIN_EMAIL and LINKEDIN_PASSWORD env vars must be set.")
+    if not LINKEDIN_COOKIE and (not LINKEDIN_EMAIL or not LINKEDIN_PASSWORD):
+        sys.exit(
+            "✗  Set either LINKEDIN_COOKIE (li_at session cookie)\n"
+            "   or both LINKEDIN_EMAIL and LINKEDIN_PASSWORD."
+        )
 
     if not Path(BANNER_PATH).exists():
         sys.exit(f"✗  Banner not found: {BANNER_PATH}")
@@ -200,7 +204,20 @@ def main() -> None:
         )
         page = context.new_page()
         try:
-            login(page)
+            if LINKEDIN_COOKIE:
+                # Inject session cookie — skips login entirely
+                print("  → Using li_at session cookie…")
+                context.add_cookies([{
+                    "name":   "li_at",
+                    "value":  LINKEDIN_COOKIE,
+                    "domain": ".linkedin.com",
+                    "path":   "/",
+                    "secure": True,
+                    "httpOnly": True,
+                }])
+                print("  ✓ Session cookie set")
+            else:
+                login(page)
             set_background(page)
         except SystemExit:
             raise
