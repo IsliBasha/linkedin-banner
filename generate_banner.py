@@ -490,7 +490,7 @@ def _register_upload() -> tuple[str, str]:
     """
     Step 1 — ask LinkedIn for a pre-signed upload URL.
 
-    Endpoint:  POST /rest/images?action=initializeUpload
+    Endpoint:  POST /v2/assets?action=registerUpload  (v2 Assets API)
     Required scope: w_member_social
 
     Returns:
@@ -498,14 +498,35 @@ def _register_upload() -> tuple[str, str]:
         image_urn  – asset URN to set on the profile
     """
     resp = requests.post(
-        "https://api.linkedin.com/rest/images?action=initializeUpload",
-        headers=_li_headers({"Content-Type": "application/json"}),
-        json={"initializeUploadRequest": {"owner": LINKEDIN_PERSON_URN}},
+        "https://api.linkedin.com/v2/assets?action=registerUpload",
+        headers={
+            "Authorization":             f"Bearer {LINKEDIN_ACCESS_TOKEN}",
+            "X-Restli-Protocol-Version": "2.0.0",
+            "Content-Type":              "application/json",
+        },
+        json={
+            "registerUploadRequest": {
+                "recipes":  ["urn:li:digitalmediaRecipe:feedshare-image"],
+                "owner":    LINKEDIN_PERSON_URN,
+                "serviceRelationships": [
+                    {
+                        "relationshipType": "OWNER",
+                        "identifier":       "urn:li:userGeneratedContent",
+                    }
+                ],
+            }
+        },
         timeout=20,
     )
     resp.raise_for_status()
-    val = resp.json()["value"]
-    return val["uploadUrl"], val["image"]
+    val      = resp.json()["value"]
+    upload_url = (
+        val["uploadMechanism"]
+           ["com.linkedin.digitalmedia.uploading.MediaUploadHttpRequest"]
+           ["uploadUrl"]
+    )
+    asset_urn = val["asset"]
+    return upload_url, asset_urn
 
 
 def _put_image_binary(upload_url: str, image_path: str) -> None:
