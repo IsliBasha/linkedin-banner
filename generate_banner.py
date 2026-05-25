@@ -472,7 +472,7 @@ def draw_banner(
 # LinkedIn upload  (3-step flow)
 # ══════════════════════════════════════════════════════════════
 
-_LI_VERSION = "202501"
+_LI_VERSION = "202412"
 
 
 def _li_headers(extra: dict[str, str] | None = None) -> dict[str, str]:
