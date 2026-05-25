@@ -1,41 +1,62 @@
 #!/usr/bin/env python3
 """
-Run this LOCALLY (once) to export your LinkedIn session cookies.
-A real browser window will open — log in, then come back here and press Enter.
-The script prints a base64 string to store as the LINKEDIN_COOKIES GitHub secret.
+Reads LinkedIn cookies directly from your Chrome installation.
+No browser window needed — Chrome just needs to be closed first.
 
 Usage:
-    pip install playwright
-    playwright install chromium
+    pip install browser-cookie3
     python3 export_linkedin_cookies.py
 """
 
 import base64
 import json
-
-from playwright.sync_api import sync_playwright
+import sys
 
 
 def main() -> None:
-    print("\n── LinkedIn Cookie Exporter ───────────────────────────")
-    print("A browser window will open. Log in to LinkedIn (use")
-    print("'Continue with Google' as normal), then come back here")
-    print("and press Enter.\n")
+    try:
+        import browser_cookie3
+    except ImportError:
+        sys.exit("✗  Run: pip install browser-cookie3")
 
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=False)
-        context = browser.new_context()
-        page    = context.new_page()
-        page.goto("https://www.linkedin.com/login")
+    print("Reading LinkedIn cookies from Chrome…")
+    print("(Make sure Chrome is closed first)\n")
 
-        input("Press Enter once you are fully logged in… ")
+    try:
+        jar = browser_cookie3.chrome(domain_name=".linkedin.com")
+    except Exception as e:
+        sys.exit(f"✗  Could not read Chrome cookies: {e}")
 
-        cookies     = context.cookies("https://www.linkedin.com")
-        cookies_b64 = base64.b64encode(json.dumps(cookies).encode()).decode()
+    cookies = [
+        {
+            "name":     c.name,
+            "value":    c.value,
+            "domain":   c.domain if c.domain.startswith(".") else f".{c.domain}",
+            "path":     c.path or "/",
+            "secure":   bool(c.secure),
+            "httpOnly": False,
+        }
+        for c in jar
+        if c.value
+    ]
 
-        browser.close()
+    if not cookies:
+        sys.exit(
+            "✗  No LinkedIn cookies found in Chrome.\n"
+            "   Make sure you are logged in to LinkedIn in Chrome."
+        )
 
-    print("\n══════════════════════════════════════════════════════")
+    # Check li_at is present
+    names = {c["name"] for c in cookies}
+    if "li_at" not in names:
+        sys.exit(
+            "✗  li_at cookie not found — are you logged in to LinkedIn in Chrome?"
+        )
+
+    cookies_b64 = base64.b64encode(json.dumps(cookies).encode()).decode()
+
+    print(f"✓  Found {len(cookies)} LinkedIn cookies (including li_at)\n")
+    print("══════════════════════════════════════════════════════")
     print("  Add this as the LINKEDIN_COOKIES secret in GitHub:")
     print("══════════════════════════════════════════════════════\n")
     print(cookies_b64)
