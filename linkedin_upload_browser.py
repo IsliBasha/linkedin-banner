@@ -86,8 +86,23 @@ def login(page) -> None:
 
 
 def set_background(page) -> None:
+    # Land on the feed first so the session cookie is fully established
+    print("  → Verifying session via feed…")
+    page.goto("https://www.linkedin.com/feed/", wait_until="domcontentloaded", timeout=30000)
+    page.wait_for_load_state("networkidle", timeout=20000)
+
+    # If we ended up on the login page the cookie is invalid/expired
+    if "/login" in page.url or "/authwall" in page.url:
+        page.screenshot(path="debug_auth.png")
+        sys.exit(
+            "✗  Session cookie rejected — it may be expired.\n"
+            "   Log in to LinkedIn in your browser, copy a fresh li_at cookie,\n"
+            "   and update the LINKEDIN_COOKIE GitHub secret."
+        )
+    print("  ✓ Session valid")
+
     print("  → Loading profile page…")
-    page.goto("https://www.linkedin.com/in/me/", wait_until="domcontentloaded")
+    page.goto("https://www.linkedin.com/in/me/", wait_until="domcontentloaded", timeout=30000)
     page.wait_for_load_state("networkidle", timeout=20000)
 
     # ── Click the background edit button ────────────────────────
