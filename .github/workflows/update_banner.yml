@@ -1,0 +1,61 @@
+name: Update LinkedIn Banner
+
+# ── Triggers ──────────────────────────────────────────────────
+on:
+  schedule:
+    - cron: '0 0 * * *'    # daily at 00:00 UTC
+  workflow_dispatch:         # manual run from the Actions tab
+
+# ── Permissions ───────────────────────────────────────────────
+permissions:
+  contents: read             # read repo files only
+
+jobs:
+  update-banner:
+    name: Generate & Upload LinkedIn Banner
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      # ── 1. Checkout ─────────────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ── 2. Python setup ─────────────────────────────────────
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      # ── 3. Dependencies ─────────────────────────────────────
+      - name: Install Python dependencies
+        run: pip install -r requirements.txt
+
+      # ── 4. Generate & upload banner ─────────────────────────
+      - name: Generate and upload banner
+        env:
+          # LinkedIn credentials
+          LINKEDIN_ACCESS_TOKEN: ${{ secrets.LINKEDIN_ACCESS_TOKEN }}
+          LINKEDIN_PERSON_URN:   ${{ secrets.LINKEDIN_PERSON_URN }}
+
+          # GitHub credentials
+          # Use a Personal Access Token (classic) with read:user scope.
+          # Store it as GH_TOKEN — do NOT use secrets.GITHUB_TOKEN here
+          # because the built-in runner token cannot query contribution data.
+          GH_TOKEN:              ${{ secrets.GH_TOKEN }}
+          GITHUB_USERNAME:       ${{ secrets.GITHUB_USERNAME }}
+
+          # Banner customisation (optional)
+          PORTFOLIO_URL:         ${{ secrets.PORTFOLIO_URL }}
+        run: python generate_banner.py
+
+      # ── 5. Persist banner as a build artifact ────────────────
+      # Useful for visual inspection without needing LinkedIn access.
+      - name: Upload banner artifact
+        uses: actions/upload-artifact@v4
+        if: always()                  # upload even when the LinkedIn step fails
+        with:
+          name: linkedin-banner-${{ github.run_number }}
+          path: banner.png
+          retention-days: 14
