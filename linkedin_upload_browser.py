@@ -86,24 +86,23 @@ def login(page) -> None:
 
 
 def set_background(page) -> None:
-    # Land on the feed first so the session cookie is fully established
+    # Land on feed first to establish session
     print("  → Verifying session via feed…")
-    page.goto("https://www.linkedin.com/feed/", wait_until="domcontentloaded", timeout=30000)
-    page.wait_for_load_state("networkidle", timeout=20000)
+    page.goto("https://www.linkedin.com/feed/", wait_until="load", timeout=30000)
+    page.wait_for_timeout(3000)  # let client-side JS settle
 
-    # If we ended up on the login page the cookie is invalid/expired
+    # If redirected to login the cookies are expired
     if "/login" in page.url or "/authwall" in page.url:
         page.screenshot(path="debug_auth.png")
         sys.exit(
-            "✗  Session cookie rejected — it may be expired.\n"
-            "   Log in to LinkedIn in your browser, copy a fresh li_at cookie,\n"
-            "   and update the LINKEDIN_COOKIE GitHub secret."
+            "✗  Session cookies rejected — they may be expired.\n"
+            "   Re-run export_linkedin_cookies.py and update LINKEDIN_COOKIES secret."
         )
     print("  ✓ Session valid")
 
     print("  → Loading profile page…")
-    page.goto("https://www.linkedin.com/in/me/", wait_until="domcontentloaded", timeout=30000)
-    page.wait_for_load_state("networkidle", timeout=20000)
+    page.goto("https://www.linkedin.com/in/me/", wait_until="load", timeout=30000)
+    page.wait_for_timeout(3000)
 
     # ── Click the background edit button ────────────────────────
     print("  → Opening background photo editor…")
