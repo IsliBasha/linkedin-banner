@@ -3,40 +3,32 @@ name: Update LinkedIn Banner
 # ── Triggers ──────────────────────────────────────────────────
 on:
   schedule:
-    - cron: '0 0 * * *'    # daily at 00:00 UTC
-  workflow_dispatch:         # manual run from the Actions tab
+    - cron: '0 6 * * *'    # daily at 06:00 UTC — banner ready before you wake up
+  workflow_dispatch:
 
 # ── Permissions ───────────────────────────────────────────────
 permissions:
-  contents: read
+  contents: write            # needed to commit banner.png back to the repo
 
 jobs:
-  update-banner:
-    name: Generate & Upload LinkedIn Banner
+  generate-banner:
+    name: Generate Banner
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 10
 
     steps:
-      # ── 1. Checkout ─────────────────────────────────────────
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # ── 2. Python setup ─────────────────────────────────────
       - name: Set up Python 3.12
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
           cache: pip
 
-      # ── 3. Dependencies ─────────────────────────────────────
-      - name: Install Python dependencies
+      - name: Install dependencies
         run: pip install -r requirements.txt
 
-      # ── 4. Playwright browser ────────────────────────────────
-      - name: Install Playwright Chromium
-        run: playwright install chromium --with-deps
-
-      # ── 5. Generate banner ───────────────────────────────────
       - name: Generate banner
         env:
           GH_TOKEN:        ${{ secrets.GH_TOKEN }}
@@ -44,21 +36,18 @@ jobs:
           PORTFOLIO_URL:   ${{ secrets.PORTFOLIO_URL }}
         run: python generate_banner.py
 
-      # ── 6. Upload to LinkedIn via browser ────────────────────
-      - name: Upload banner to LinkedIn
-        env:
-          LINKEDIN_COOKIES:  ${{ secrets.LINKEDIN_COOKIES }}
-          LINKEDIN_EMAIL:    ${{ secrets.LINKEDIN_EMAIL }}
-          LINKEDIN_PASSWORD: ${{ secrets.LINKEDIN_PASSWORD }}
-        run: python linkedin_upload_browser.py
+      # Commit banner.png back to the repo so the local uploader can pull it
+      - name: Commit updated banner
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add banner.png
+          git diff --cached --quiet || git commit -m "chore: update banner.png [skip ci]"
+          git push
 
-      # ── 7. Persist banner as artifact ────────────────────────
       - name: Upload banner artifact
         uses: actions/upload-artifact@v4
-        if: always()
         with:
           name: linkedin-banner-${{ github.run_number }}
-          path: |
-            banner.png
-            debug_*.png
+          path: banner.png
           retention-days: 14
