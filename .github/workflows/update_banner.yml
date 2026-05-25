@@ -47,7 +47,7 @@ jobs:
       # ── 6. Upload to LinkedIn via browser ────────────────────
       - name: Upload banner to LinkedIn
         env:
-          LINKEDIN_COOKIE:   ${{ secrets.LINKEDIN_COOKIE }}
+          LINKEDIN_COOKIES:  ${{ secrets.LINKEDIN_COOKIES }}
           LINKEDIN_EMAIL:    ${{ secrets.LINKEDIN_EMAIL }}
           LINKEDIN_PASSWORD: ${{ secrets.LINKEDIN_PASSWORD }}
         run: python linkedin_upload_browser.py

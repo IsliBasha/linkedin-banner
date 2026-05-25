@@ -20,7 +20,7 @@ from playwright.sync_api import sync_playwright
 
 LINKEDIN_EMAIL    = os.environ.get("LINKEDIN_EMAIL", "")
 LINKEDIN_PASSWORD = os.environ.get("LINKEDIN_PASSWORD", "")
-LINKEDIN_COOKIE   = os.environ.get("LINKEDIN_COOKIE", "")   # li_at session cookie
+LINKEDIN_COOKIES  = os.environ.get("LINKEDIN_COOKIES", "")  # base64 JSON from export_linkedin_cookies.py
 BANNER_PATH       = str(Path("banner.png").resolve())
 
 
@@ -193,9 +193,9 @@ def set_background(page) -> None:
 
 
 def main() -> None:
-    if not LINKEDIN_COOKIE and (not LINKEDIN_EMAIL or not LINKEDIN_PASSWORD):
+    if not LINKEDIN_COOKIES and (not LINKEDIN_EMAIL or not LINKEDIN_PASSWORD):
         sys.exit(
-            "✗  Set either LINKEDIN_COOKIE (li_at session cookie)\n"
+            "✗  Set either LINKEDIN_COOKIES (base64 from export_linkedin_cookies.py)\n"
             "   or both LINKEDIN_EMAIL and LINKEDIN_PASSWORD."
         )
 
@@ -219,18 +219,13 @@ def main() -> None:
         )
         page = context.new_page()
         try:
-            if LINKEDIN_COOKIE:
-                # Inject session cookie — skips login entirely
-                print("  → Using li_at session cookie…")
-                context.add_cookies([{
-                    "name":   "li_at",
-                    "value":  LINKEDIN_COOKIE,
-                    "domain": ".linkedin.com",
-                    "path":   "/",
-                    "secure": True,
-                    "httpOnly": True,
-                }])
-                print("  ✓ Session cookie set")
+            if LINKEDIN_COOKIES:
+                # Inject full cookie set exported by export_linkedin_cookies.py
+                print("  → Injecting LinkedIn session cookies…")
+                import base64, json as _json
+                cookies = _json.loads(base64.b64decode(LINKEDIN_COOKIES).decode())
+                context.add_cookies(cookies)
+                print(f"  ✓ {len(cookies)} cookies injected")
             else:
                 login(page)
             set_background(page)
