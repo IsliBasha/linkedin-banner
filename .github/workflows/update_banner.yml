@@ -44,7 +44,7 @@ jobs:
           # Store it as GH_TOKEN — do NOT use secrets.GITHUB_TOKEN here
           # because the built-in runner token cannot query contribution data.
           GH_TOKEN:              ${{ secrets.GH_TOKEN }}
-          GITHUB_USERNAME:       ${{ secrets.GITHUB_USERNAME }}
+          GITHUB_USERNAME:       ${{ secrets.GH_USERNAME }}
 
           # Banner customisation (optional)
           PORTFOLIO_URL:         ${{ secrets.PORTFOLIO_URL }}
