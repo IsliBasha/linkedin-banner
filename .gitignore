@@ -1,4 +1,5 @@
-banner.png
+# banner.png is committed by GitHub Actions (generate step) and pulled by
+# upload_local.py (upload step) — it must NOT be gitignored.
 fonts/
 __pycache__/
 *.pyc
