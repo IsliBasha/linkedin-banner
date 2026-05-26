@@ -195,13 +195,61 @@ def upload_banner() -> None:
                 except Exception:
                     pass
 
-        # Match the actual LinkedIn SDUI endpoint — saveProfileBackgroundImage
-        # is in the POST body, NOT the URL.
-        page.route("**/voyager/api/server-request*", _clamp_and_forward)
+        def _clamp_and_forward(route):
+            req = route.request
+            # Only intercept POST requests — all others pass straight through
+            if req.method.upper() != "POST":
+                route.continue_()
+                return
+            try:
+                raw = req.post_data or ""
+            except Exception:
+                try:
+                    raw = req.post_data_buffer.decode("utf-8", errors="replace")
+                except Exception:
+                    raw = ""
+
+            # Only touch the background-image save request (identified by body)
+            if raw and "saveProfileBackgroundImage" in raw:
+                save_intercepted[0] = True
+                try:
+                    body = _json.loads(raw)
+                    fixed = False
+
+                    # Fix 1 — top-level states
+                    if _clamp_states_list(body.get("states", [])):
+                        fixed = True
+
+                    # Fix 2 — nested requestedArguments.states (duplicate copy)
+                    req_args = body.get("requestedArguments", {})
+                    if isinstance(req_args, dict):
+                        if _clamp_states_list(req_args.get("states", [])):
+                            fixed = True
+
+                    if fixed:
+                        raw = _json.dumps(body)
+                        print("     ✓ Clamped crop coordinates to [0, 1]")
+                    else:
+                        print("     ℹ  Crop coordinates already in range — no clamping needed")
+                except Exception as exc:
+                    print(f"     ⚠  crop-clamp error: {exc}")
+
+            try:
+                route.continue_(post_data=raw) if raw else route.continue_()
+            except Exception:
+                try:
+                    route.continue_()
+                except Exception:
+                    pass
+
+        # Intercept ALL requests via **/* — the save endpoint URL varies and
+        # doesn't include 'saveProfileBackgroundImage' in the URL itself
+        # (it's in the POST body).  Non-POST requests are passed through immediately.
+        page.route("**/*", _clamp_and_forward)
 
         def _on_save_resp(resp):
-            # Capture the response for the save request (identified by body flag)
-            if "server-request" in resp.url and save_intercepted[0] and not save_resp_body:
+            # Capture the first response that arrives after the save request fired
+            if save_intercepted[0] and not save_resp_body:
                 try:
                     save_resp_body.append(resp.text()[:2000])
                 except Exception:
@@ -377,17 +425,13 @@ def upload_banner() -> None:
                 page.screenshot(path=str(REPO_DIR / "debug_apply_failed.png"))
                 sys.exit("✗  Apply button not found in crop editor → debug_apply_failed.png")
 
-            # Wait for the save response (the server-request POST with
-            # saveProfileBackgroundImage in the body).  We cap at 20 s.
+            # Wait for the save response — the response listener fires as soon
+            # as save_intercepted[0] is True (set inside _clamp_and_forward).
             print("  → Waiting for save response…")
             try:
-                page.wait_for_response(
-                    lambda r: "server-request" in r.url and save_intercepted[0],
-                    timeout=20_000,
-                )
-                page.wait_for_timeout(1_500)   # brief settle for UI update
+                page.wait_for_timeout(3_000)   # allow response to arrive
             except Exception:
-                page.wait_for_timeout(4_000)   # fallback settle
+                pass
 
             page.screenshot(path=str(REPO_DIR / "debug_05_after_apply.png"))
 
@@ -401,12 +445,13 @@ def upload_banner() -> None:
                 ))
                 status_ok = not has_error
                 print(f"  {'✓ Save OK' if status_ok else '✗ Save FAILED'} — server response snippet:")
+                import re as _re
                 m = _re.search(r'"completionAction":\{.*?\}', resp_text, _re.DOTALL)
                 print(f"     {(m.group()[:400] if m else resp_text[:400])}")
             elif save_intercepted[0]:
-                print("  ⚠  Save request intercepted but no response captured yet — proceeding")
+                print("  ✓ Save request intercepted — no response body captured (OK)")
             else:
-                print("  ⚠  Save request was NOT intercepted — crop clamp may not have fired")
+                print("  ⚠  Save request was NOT intercepted — crop clamp did not fire")
 
             # ── After crop Apply there may be a final Save/Confirm step ───────
             # LinkedIn sometimes shows a "Cover photo" dialog again where you
