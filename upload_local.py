@@ -111,6 +111,47 @@ def upload_banner() -> None:
         # the save if any coordinate is even slightly outside [0, 1] (e.g.
         # -6.12e-17 or 1.0000000000000001) due to floating-point drift in
         # the rotation-matrix used by the crop editor.
+        #
+        # KEY FIX: `saveProfileBackgroundImage` is in the POST *body*, NOT
+        # the URL.  LinkedIn posts to /voyager/api/server-request, so we
+        # intercept that endpoint and filter by body content.
+        # The bad coords appear in TWO places in the body:
+        #   body["states"]  AND  body["requestedArguments"]["states"]
+        # Both must be clamped.
+
+        import json as _json
+
+        save_intercepted: list[bool] = [False]
+        save_resp_body: list[str] = []
+
+        def _clamp_states_list(states_list: list) -> bool:
+            """Clamp croppedRegion coords to [0, 1] in-place. Returns True if any changed."""
+            changed = False
+            for state in states_list:
+                if not isinstance(state, dict):
+                    continue
+                val = state.get("value", {})
+                if not isinstance(val, dict):
+                    continue
+                for mf in val.get("mediaFiles", []):
+                    if not isinstance(mf, dict):
+                        continue
+                    cr = mf.get("editData", {}).get("croppedRegion", {})
+                    if not isinstance(cr, dict):
+                        continue
+                    for corner in ("topLeft", "topRight", "bottomLeft", "bottomRight"):
+                        pt = cr.get(corner, {})
+                        if not isinstance(pt, dict):
+                            continue
+                        for ax in ("x", "y"):
+                            v = pt.get(ax)
+                            if v is not None:
+                                c = max(0.0, min(1.0, float(v)))
+                                if c != v:
+                                    pt[ax] = c
+                                    changed = True
+            return changed
+
         def _clamp_and_forward(route):
             req = route.request
             try:
@@ -121,30 +162,28 @@ def upload_banner() -> None:
                 except Exception:
                     raw = ""
 
-            if raw:
+            # Only touch the background-image save request
+            if raw and "saveProfileBackgroundImage" in raw:
+                save_intercepted[0] = True
                 try:
-                    import json as _json
                     body = _json.loads(raw)
                     fixed = False
-                    for state in body.get("states", []):
-                        val = state.get("value", {})
-                        if not isinstance(val, dict):
-                            continue
-                        for mf in val.get("mediaFiles", []):
-                            ed = mf.get("editData", {})
-                            cr = ed.get("croppedRegion", {})
-                            for corner in ("topLeft", "topRight", "bottomLeft", "bottomRight"):
-                                pt = cr.get(corner, {})
-                                for ax in ("x", "y"):
-                                    v = pt.get(ax)
-                                    if v is not None:
-                                        clamped = max(0.0, min(1.0, v))
-                                        if clamped != v:
-                                            pt[ax] = clamped
-                                            fixed = True
+
+                    # Fix 1 — top-level states
+                    if _clamp_states_list(body.get("states", [])):
+                        fixed = True
+
+                    # Fix 2 — nested requestedArguments.states (duplicate copy)
+                    req_args = body.get("requestedArguments", {})
+                    if isinstance(req_args, dict):
+                        if _clamp_states_list(req_args.get("states", [])):
+                            fixed = True
+
                     if fixed:
                         raw = _json.dumps(body)
                         print("     ✓ Clamped crop coordinates to [0, 1]")
+                    else:
+                        print("     ℹ  Crop coordinates already in range — no clamping needed")
                 except Exception as exc:
                     print(f"     ⚠  crop-clamp error: {exc}")
 
@@ -156,14 +195,15 @@ def upload_banner() -> None:
                 except Exception:
                     pass
 
-        page.route("**/server-request*saveProfileBackgroundImage*", _clamp_and_forward)
+        # Match the actual LinkedIn SDUI endpoint — saveProfileBackgroundImage
+        # is in the POST body, NOT the URL.
+        page.route("**/voyager/api/server-request*", _clamp_and_forward)
 
-        # Capture save response body
-        save_resp_body: list[str] = []
         def _on_save_resp(resp):
-            if "saveProfileBackgroundImage" in resp.url:
+            # Capture the response for the save request (identified by body flag)
+            if "server-request" in resp.url and save_intercepted[0] and not save_resp_body:
                 try:
-                    save_resp_body.append(resp.text()[:1200])
+                    save_resp_body.append(resp.text()[:2000])
                 except Exception:
                     pass
         page.on("response", _on_save_resp)
@@ -337,19 +377,36 @@ def upload_banner() -> None:
                 page.screenshot(path=str(REPO_DIR / "debug_apply_failed.png"))
                 sys.exit("✗  Apply button not found in crop editor → debug_apply_failed.png")
 
-            page.wait_for_timeout(4_000)
+            # Wait for the save response (the server-request POST with
+            # saveProfileBackgroundImage in the body).  We cap at 20 s.
+            print("  → Waiting for save response…")
+            try:
+                page.wait_for_response(
+                    lambda r: "server-request" in r.url and save_intercepted[0],
+                    timeout=20_000,
+                )
+                page.wait_for_timeout(1_500)   # brief settle for UI update
+            except Exception:
+                page.wait_for_timeout(4_000)   # fallback settle
+
             page.screenshot(path=str(REPO_DIR / "debug_05_after_apply.png"))
 
+            import re as _re
             if save_resp_body:
-                body = save_resp_body[0]
-                has_error = "Save failed" in body or '"errors"' in body
-                print(f"  {'✗ Save FAILED' if has_error else '✓ Save OK'} — server response snippet:")
-                # Print just the completionAction part
-                import re as _re
-                m = _re.search(r'"completionAction":\{.*?\}(?=,"errors")', body, _re.DOTALL)
-                print(f"     {(m.group()[:400] if m else body[:400])}")
+                resp_text = save_resp_body[0]
+                # LinkedIn SDUI error indicators
+                has_error = any(tok in resp_text for tok in (
+                    '"errors"', '"errorCode"', '"error":', '"errorDetails"',
+                    "Save failed", "Bad Request", '"status":400', '"status":500',
+                ))
+                status_ok = not has_error
+                print(f"  {'✓ Save OK' if status_ok else '✗ Save FAILED'} — server response snippet:")
+                m = _re.search(r'"completionAction":\{.*?\}', resp_text, _re.DOTALL)
+                print(f"     {(m.group()[:400] if m else resp_text[:400])}")
+            elif save_intercepted[0]:
+                print("  ⚠  Save request intercepted but no response captured yet — proceeding")
             else:
-                print("  ⚠  No save response captured")
+                print("  ⚠  Save request was NOT intercepted — crop clamp may not have fired")
 
             # ── After crop Apply there may be a final Save/Confirm step ───────
             # LinkedIn sometimes shows a "Cover photo" dialog again where you
