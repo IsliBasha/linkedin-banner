@@ -129,20 +129,18 @@ class TestProfilePictureSafeZone:
 
 class TestLegendLayout:
     """
-    Legend must use a variable-column layout so that no item ends up in the
-    bottom-left quadrant where the profile-picture circle overlaps.
+    Legend uses a uniform 3-column grid now that stats are on the right half
+    where the profile-picture circle cannot reach (x > BANNER_W // 2 = 792).
 
-    Required layout: [3, 2, 2, 2]  — 9 languages max across 4 rows.
-    Row 0 spans full width (3 cols); rows 1-3 use 2 wider cols, shifting
-    items right and reducing vertical extent vs a flat 3-col grid.
+    Required layout: [3, 3, 3] — 9 languages max across 3 rows.
     """
 
     def test_legend_layout_constant_exists(self):
         assert hasattr(gb, "LEGEND_LAYOUT"), "LEGEND_LAYOUT constant not found"
 
-    def test_legend_layout_is_3_2_2_2(self):
-        assert gb.LEGEND_LAYOUT == [3, 2, 2, 2], (
-            f"Expected [3, 2, 2, 2], got {gb.LEGEND_LAYOUT}"
+    def test_legend_layout_is_3_3_3(self):
+        assert gb.LEGEND_LAYOUT == [3, 3, 3], (
+            f"Expected [3, 3, 3], got {gb.LEGEND_LAYOUT}"
         )
 
     def test_legend_max_languages(self):

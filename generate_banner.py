@@ -44,6 +44,7 @@ CONTENT_LEFT_X: int = 800   # stats section starts here (right half: 800 > 792)
 CONTENT_TOP_Y:  int = 24    # top of the stats block — near banner top
 
 GRID_LEFT_PAD: int = 44     # left padding for the contribution grid
+GRID_TOP_Y:   int = 54     # y where the grid cells begin (header sits above this)
 
 # ── Font sizes — calibrated for readability at ~52% viewport scale ──
 # At 1584→830px render scale, multiply by 0.52 for effective px.
@@ -58,10 +59,10 @@ GRID_CELL_SIZE: int = 10   # each cell square side (px)
 GRID_GAP:       int = 2    # gap between cells (px)
 
 # ── Legend row layout ───────────────────────────────────────────
-# Number of language items per row. Variable width so lower rows
-# use wider columns, keeping items away from the profile-pic circle.
-# [3, 2, 2, 2] = 9 languages max across 4 rows.
-LEGEND_LAYOUT: list[int] = [3, 2, 2, 2]
+# Number of language items per row. Uniform 3-column grid — safe now
+# that stats live on the right half where the profile pic can't reach.
+# [3, 3, 3] = 9 languages max across 3 rows.
+LEGEND_LAYOUT: list[int] = [3, 3, 3]
 
 # ── Colour palette — terminal dark (GitHub dark mode) ──────────
 BG          = ( 13,  17,  23)   # #0d1117  canvas
@@ -375,9 +376,8 @@ def _draw_right(draw: ImageDraw.Draw, weeks: list[dict]) -> None:
     hdr_font = load_font("Regular", FONT_GRID_HDR_SIZE)
     cap_font = load_font("Regular", FONT_LABEL_SIZE)
 
-    # Vertically centre within banner height
-    BLOCK_H = FONT_GRID_HDR_SIZE + 10 + grid_h + 10 + FONT_LABEL_SIZE
-    grid_y0 = (BANNER_H - BLOCK_H) // 2 + FONT_GRID_HDR_SIZE + 10
+    # Pin grid top to GRID_TOP_Y (raised toward the banner top)
+    grid_y0 = GRID_TOP_Y
 
     draw.text(
         (grid_x0, grid_y0 - FONT_GRID_HDR_SIZE - 10),
