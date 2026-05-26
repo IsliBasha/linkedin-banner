@@ -53,6 +53,12 @@ FONT_GRID_HDR_SIZE: int = 18   # contribution grid header
 GRID_CELL_SIZE: int = 10   # each cell square side (px)
 GRID_GAP:       int = 2    # gap between cells (px)
 
+# ── Legend row layout ───────────────────────────────────────────
+# Number of language items per row. Variable width so lower rows
+# use wider columns, keeping items away from the profile-pic circle.
+# [3, 2, 2, 2] = 9 languages max across 4 rows.
+LEGEND_LAYOUT: list[int] = [3, 2, 2, 2]
+
 # ── Colour palette — terminal dark (GitHub dark mode) ──────────
 BG          = ( 13,  17,  23)   # #0d1117  canvas
 SURFACE     = ( 22,  27,  34)   # #161b22  elevated surface
@@ -315,28 +321,35 @@ def _draw_center(
     ]
     _draw_segmented_bar(img, left_x, bar_y, bar_w, bar_h, segments, radius=bar_h // 2)
 
-    # 3-column dot legend
+    # Variable-column dot legend (layout defined by LEGEND_LAYOUT).
+    # Each row can have a different number of columns so lower rows
+    # use wider slots, reducing visual clutter near the profile-picture zone.
     legend_y = bar_y + bar_h + 12
-    COLS  = 3
-    col_w = bar_w // COLS
-    row_h = FONT_LEGEND_SIZE + 6
-    dot_r = 4
+    row_h    = FONT_LEGEND_SIZE + 6
+    dot_r    = 4
+    lang_idx = 0
 
-    for i, (lang, pct) in enumerate(top_langs):
-        col    = i % COLS
-        row    = i // COLS
-        item_x = left_x + col * col_w
-        item_y = legend_y + row * row_h
+    for row_idx, cols_in_row in enumerate(LEGEND_LAYOUT):
+        if lang_idx >= len(top_langs):
+            break
+        item_y = legend_y + row_idx * row_h
         if item_y + FONT_LEGEND_SIZE > BANNER_H - 10:
             break
-        color = _hex_to_rgb(LINGUIST_COLORS.get(lang, "#555555"))
-        draw.ellipse(
-            [(item_x, item_y + 5), (item_x + dot_r * 2, item_y + 5 + dot_r * 2)],
-            fill=color,
-        )
-        name_str = (lang[:10] + "…") if len(lang) > 11 else lang
-        label    = f" {name_str}  {pct:.1f}%"
-        draw.text((item_x + dot_r * 2, item_y), label, font=leg_font, fill=TEXT_BRIGHT)
+        col_w = bar_w // cols_in_row
+        for col_idx in range(cols_in_row):
+            if lang_idx >= len(top_langs):
+                break
+            lang, pct = top_langs[lang_idx]
+            item_x = left_x + col_idx * col_w
+            color  = _hex_to_rgb(LINGUIST_COLORS.get(lang, "#555555"))
+            draw.ellipse(
+                [(item_x, item_y + 5), (item_x + dot_r * 2, item_y + 5 + dot_r * 2)],
+                fill=color,
+            )
+            name_str = (lang[:10] + "…") if len(lang) > 11 else lang
+            label    = f" {name_str}  {pct:.1f}%"
+            draw.text((item_x + dot_r * 2, item_y), label, font=leg_font, fill=TEXT_BRIGHT)
+            lang_idx += 1
 
 
 def _draw_right(draw: ImageDraw.Draw, weeks: list[dict]) -> None:
