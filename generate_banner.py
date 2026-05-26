@@ -32,14 +32,18 @@ FONT_DIR:      Path = Path("fonts")
 BANNER_W, BANNER_H = 1584, 396
 
 # ── Layout ─────────────────────────────────────────────────────
-# The LinkedIn profile picture is ~190px Ø, centred at the
-# bottom-left corner of the cover photo.  Keep x < 215 empty.
-# Content starts at CONTENT_LEFT_X; push CONTENT_TOP_Y to the
-# top so nothing is hidden behind the profile-picture circle.
-CONTENT_LEFT_X: int = 220    # first pixel where text may appear (left section)
-CONTENT_TOP_Y:  int = 24     # top of the stats block — near banner top
+# Section order (left → right):
+#   [Contribution grid] | [Stats: commits + languages]
+#
+# The LinkedIn profile picture is anchored to the BOTTOM-LEFT corner.
+# Placing stats in the RIGHT half guarantees they are never obscured —
+# the profile picture physically cannot reach x > BANNER_W/2 (= 792).
+DIV2_X: int = 750            # divider x: grid | stats
 
-DIV2_X: int = 880            # divider x: stats | contribution grid
+CONTENT_LEFT_X: int = 800   # stats section starts here (right half: 800 > 792)
+CONTENT_TOP_Y:  int = 24    # top of the stats block — near banner top
+
+GRID_LEFT_PAD: int = 44     # left padding for the contribution grid
 
 # ── Font sizes — calibrated for readability at ~52% viewport scale ──
 # At 1584→830px render scale, multiply by 0.52 for effective px.
@@ -280,7 +284,7 @@ def _draw_center(
     top_langs: list[tuple[str, float]],
 ) -> None:
     """
-    Center section (x: CONTENT_LEFT_X → DIV2_X):
+    Stats section — RIGHT half (x: CONTENT_LEFT_X → BANNER_W - pad):
 
       // commits · 12mo
       1,284                 ← large green number
@@ -289,9 +293,12 @@ def _draw_center(
       // languages
       [████ linguist bar]
       ● Kotlin  24.4%  ● Python  22.8%  …
+
+    Placed on the right so the profile-picture circle (bottom-left) can
+    never obscure the text content.
     """
     left_x  = CONTENT_LEFT_X
-    right_x = DIV2_X - 40
+    right_x = BANNER_W - 44
     bar_w   = right_x - left_x
 
     top_y = CONTENT_TOP_Y
@@ -353,12 +360,17 @@ def _draw_center(
 
 
 def _draw_right(draw: ImageDraw.Draw, weeks: list[dict]) -> None:
-    """Right section: 52-week contribution grid."""
+    """
+    Contribution grid — LEFT section (x: GRID_LEFT_PAD → DIV2_X).
+
+    Placed on the left so it sits behind/near the profile-picture circle.
+    Grid cells are coloured squares — partial overlap is visually acceptable
+    and far preferable to readable text being obscured.
+    """
     STEP   = GRID_CELL_SIZE + GRID_GAP
     grid_h = 7 * STEP - GRID_GAP
 
-    pad     = 48
-    grid_x0 = DIV2_X + pad
+    grid_x0 = GRID_LEFT_PAD
 
     hdr_font = load_font("Regular", FONT_GRID_HDR_SIZE)
     cap_font = load_font("Regular", FONT_LABEL_SIZE)
@@ -401,6 +413,7 @@ def draw_banner(
     draw = ImageDraw.Draw(img)
 
     pad_y = 40
+    # Divider between grid (left) and stats (right)
     draw.line([(DIV2_X, pad_y), (DIV2_X, BANNER_H - pad_y)], fill=DIVIDER, width=1)
 
     _draw_center(img, draw, total_commits, top_langs)

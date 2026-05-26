@@ -177,10 +177,10 @@ class TestContributionGrid:
         )
 
     def test_grid_fits_within_banner_width(self):
-        """52 weeks must not overflow the right side of the banner."""
+        """52 weeks must not overflow the divider (grid is now on the LEFT)."""
         grid_width = 52 * (gb.GRID_CELL_SIZE + gb.GRID_GAP) - gb.GRID_GAP
-        grid_x0 = gb.DIV2_X + 50   # approx start x
-        assert grid_x0 + grid_width <= gb.BANNER_W, (
+        grid_x0 = gb.GRID_LEFT_PAD
+        assert grid_x0 + grid_width <= gb.DIV2_X, (
             f"Grid would extend to x={grid_x0 + grid_width}, "
-            f"beyond banner width {gb.BANNER_W}"
+            f"beyond divider at x={gb.DIV2_X}"
         )
