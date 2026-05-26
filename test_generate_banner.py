@@ -141,6 +141,41 @@ class TestProfilePictureSafeZone:
         )
 
 
+# ── Legend layout ────────────────────────────────────────────────────────────
+
+class TestLegendLayout:
+    """
+    Legend must use a variable-column layout so that no item ends up in the
+    bottom-left quadrant where the profile-picture circle overlaps.
+
+    Required layout: [3, 2, 2, 2]  — 9 languages max across 4 rows.
+    Row 0 spans full width (3 cols); rows 1-3 use 2 wider cols, shifting
+    items right and reducing vertical extent vs a flat 3-col grid.
+    """
+
+    def test_legend_layout_constant_exists(self):
+        assert hasattr(gb, "LEGEND_LAYOUT"), "LEGEND_LAYOUT constant not found"
+
+    def test_legend_layout_is_3_2_2_2(self):
+        assert gb.LEGEND_LAYOUT == [3, 2, 2, 2], (
+            f"Expected [3, 2, 2, 2], got {gb.LEGEND_LAYOUT}"
+        )
+
+    def test_legend_max_languages(self):
+        """Total slots = sum of LEGEND_LAYOUT = 9."""
+        assert sum(gb.LEGEND_LAYOUT) == 9
+
+    def test_legend_renders_9_languages_without_overflow(self):
+        """9-language input must render without raising and fit in banner."""
+        nine_langs = [
+            ("Python",     28.0), ("Kotlin",     24.0), ("JavaScript", 18.0),
+            ("TypeScript", 14.0), ("CSS",         7.0), ("Shell",       4.0),
+            ("HTML",        3.0), ("Zig",         1.5), ("Rust",        0.5),
+        ]
+        img = gb.draw_banner(1284, nine_langs, WEEKS)
+        assert img.size == (1584, 396)
+
+
 # ── Contribution grid geometry ────────────────────────────────────────────────
 
 class TestContributionGrid:
