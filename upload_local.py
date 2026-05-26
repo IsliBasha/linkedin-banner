@@ -106,155 +106,141 @@ def upload_banner() -> None:
         # get clipped.  Must be set before navigation.
         page.set_viewport_size({"width": 1280, "height": 1100})
 
-        # Intercept the saveProfileBackgroundImage request and clamp crop
-        # coordinates to the valid [0, 1] range.  LinkedIn's server rejects
-        # the save if any coordinate is even slightly outside [0, 1] (e.g.
-        # -6.12e-17 or 1.0000000000000001) due to floating-point drift in
-        # the rotation-matrix used by the crop editor.
+        # ── Crop-coordinate clamp — JavaScript fetch interceptor ─────────────
+        # LinkedIn's crop editor generates floating-point drift in the rotation
+        # matrix (e.g. bottomLeft.x = -6.12e-17, bottomRight.y = 1.000000001).
+        # The server rejects any coordinate outside [0, 1].
         #
-        # KEY FIX: `saveProfileBackgroundImage` is in the POST *body*, NOT
-        # the URL.  LinkedIn posts to /voyager/api/server-request, so we
-        # intercept that endpoint and filter by body content.
-        # The bad coords appear in TWO places in the body:
-        #   body["states"]  AND  body["requestedArguments"]["states"]
-        # Both must be clamped.
+        # Strategy: inject a JS fetch interceptor that clamps the coords using
+        # LinkedIn's own JSON.stringify — this avoids any encoding/type mismatch
+        # that the Playwright Python-level route.continue_(post_data=...) approach
+        # caused (which resulted in "Save failed" toasts despite clamping).
+        #
+        # The interceptor runs at page-init time (add_init_script) so it is
+        # active for every navigation on this page, including the profile page.
 
-        import json as _json
+        _JS_CLAMP_PATCH = """
+(function () {
+    if (window.__bannerCropPatchInstalled) return;
+    window.__bannerCropPatchInstalled = true;
 
+    // Clamp and clean a single coordinate value:
+    //  - values within 1e-9 of 0 → exact 0
+    //  - values within 1e-9 of 1 → exact 1
+    //  - all others → clamped to [0, 1]
+    // LinkedIn's crop editor generates values like 9.8e-16 (should be 0) and
+    // 1.000000000000001 (should be 1) due to rotation-matrix floating-point drift.
+    // Servers often require exact 0.0 / 1.0 at the corners of a full-image crop.
+    function cleanCoord(v) {
+        var n = Number(v);
+        if (Math.abs(n) < 1e-9)     return 0;
+        if (Math.abs(n - 1) < 1e-9) return 1;
+        return Math.max(0, Math.min(1, n));
+    }
+
+    function clampStates(states) {
+        if (!Array.isArray(states)) return false;
+        var fixed = false;
+        states.forEach(function (state) {
+            var val = state && state.value;
+            if (!val || typeof val !== 'object' || !val.mediaFiles) return;
+            (val.mediaFiles || []).forEach(function (mf) {
+                var cr = mf && mf.editData && mf.editData.croppedRegion;
+                if (!cr || typeof cr !== 'object') return;
+                ['topLeft','topRight','bottomLeft','bottomRight'].forEach(function (corner) {
+                    var pt = cr[corner];
+                    if (!pt) return;
+                    ['x','y'].forEach(function (ax) {
+                        var v = pt[ax];
+                        if (v !== undefined && v !== null) {
+                            var c = cleanCoord(v);
+                            if (c !== v) { pt[ax] = c; fixed = true; }
+                        }
+                    });
+                });
+            });
+        });
+        return fixed;
+    }
+
+    var origFetch = window.fetch;
+    window.fetch = function (url, options) {
+        var rest = Array.prototype.slice.call(arguments, 2);
+        // Only intercept the actual save endpoint (match by URL, not body content).
+        // profileImageRegister body also contains 'saveProfileBackgroundImage' as a
+        // next-action reference, so body-content matching would over-fire.
+        var isSave = typeof url === 'string' &&
+            url.indexOf('saveProfileBackgroundImage') !== -1;
+        if (isSave && options && options.body && typeof options.body === 'string') {
+            try {
+                var body = JSON.parse(options.body);
+                var f1 = clampStates(body.states || []);
+                var f2 = clampStates(((body.requestedArguments || {}).states) || []);
+                if (f1 || f2) {
+                    console.log('[BannerPatch] clamped crop coords → ' + url);
+                    options = Object.assign({}, options, {body: JSON.stringify(body)});
+                } else {
+                    console.log('[BannerPatch] save endpoint — coords already clean');
+                }
+            } catch (e) {
+                console.error('[BannerPatch] parse error:', e);
+            }
+        }
+        return origFetch.apply(this, [url, options].concat(rest));
+    };
+    console.log('[BannerPatch] fetch interceptor installed');
+})();
+"""
+        # Install before any navigation so it is active on the profile page
+        page.add_init_script(_JS_CLAMP_PATCH)
+
+        # Track when the JS patch fires (via console messages)
         save_intercepted: list[bool] = [False]
-        save_resp_body: list[str] = []
 
-        def _clamp_states_list(states_list: list) -> bool:
-            """Clamp croppedRegion coords to [0, 1] in-place. Returns True if any changed."""
-            changed = False
-            for state in states_list:
-                if not isinstance(state, dict):
-                    continue
-                val = state.get("value", {})
-                if not isinstance(val, dict):
-                    continue
-                for mf in val.get("mediaFiles", []):
-                    if not isinstance(mf, dict):
-                        continue
-                    cr = mf.get("editData", {}).get("croppedRegion", {})
-                    if not isinstance(cr, dict):
-                        continue
-                    for corner in ("topLeft", "topRight", "bottomLeft", "bottomRight"):
-                        pt = cr.get(corner, {})
-                        if not isinstance(pt, dict):
-                            continue
-                        for ax in ("x", "y"):
-                            v = pt.get(ax)
-                            if v is not None:
-                                c = max(0.0, min(1.0, float(v)))
-                                if c != v:
-                                    pt[ax] = c
-                                    changed = True
-            return changed
-
-        def _clamp_and_forward(route):
-            req = route.request
-            try:
-                raw = req.post_data or ""
-            except Exception:
-                try:
-                    raw = req.post_data_buffer.decode("utf-8", errors="replace")
-                except Exception:
-                    raw = ""
-
-            # Only touch the background-image save request
-            if raw and "saveProfileBackgroundImage" in raw:
+        def _on_console(msg):
+            if "BannerPatch" in msg.text:
                 save_intercepted[0] = True
+                print(f"     [JS] {msg.text}")
+        page.on("console", _on_console)
+
+        # Capture full request + response for profileImageRegister and
+        # saveProfileBackgroundImage so we can diagnose failures.
+        import json as _json
+        _key_reqs:   list[dict] = []
+        _key_resps:  list[dict] = []
+
+        def _capture_req(req) -> None:
+            if any(k in req.url for k in (
+                "saveProfileBackgroundImage", "profileImageRegister",
+            )):
+                tag = "SAVE" if "save" in req.url.lower() else "REGISTER"
+                body = ""
                 try:
-                    body = _json.loads(raw)
-                    fixed = False
-
-                    # Fix 1 — top-level states
-                    if _clamp_states_list(body.get("states", [])):
-                        fixed = True
-
-                    # Fix 2 — nested requestedArguments.states (duplicate copy)
-                    req_args = body.get("requestedArguments", {})
-                    if isinstance(req_args, dict):
-                        if _clamp_states_list(req_args.get("states", [])):
-                            fixed = True
-
-                    if fixed:
-                        raw = _json.dumps(body)
-                        print("     ✓ Clamped crop coordinates to [0, 1]")
-                    else:
-                        print("     ℹ  Crop coordinates already in range — no clamping needed")
-                except Exception as exc:
-                    print(f"     ⚠  crop-clamp error: {exc}")
-
-            try:
-                route.continue_(post_data=raw) if raw else route.continue_()
-            except Exception:
-                try:
-                    route.continue_()
+                    body = req.post_data or ""
                 except Exception:
                     pass
+                _key_reqs.append({"tag": tag, "url": req.url, "body": body})
+                print(f"     [REQ-{tag}] {req.url[:100]}")
 
-        def _clamp_and_forward(route):
-            req = route.request
-            # Only intercept POST requests — all others pass straight through
-            if req.method.upper() != "POST":
-                route.continue_()
-                return
-            try:
-                raw = req.post_data or ""
-            except Exception:
+        def _capture_resp(resp) -> None:
+            if any(k in resp.url for k in (
+                "saveProfileBackgroundImage", "profileImageRegister",
+            )):
+                tag = "SAVE" if "save" in resp.url.lower() else "REGISTER"
+                body = ""
                 try:
-                    raw = req.post_data_buffer.decode("utf-8", errors="replace")
+                    body = resp.text()
                 except Exception:
-                    raw = ""
+                    body = "<unreadable>"
+                _key_resps.append({
+                    "tag": tag, "url": resp.url,
+                    "status": resp.status, "body": body,
+                })
+                print(f"     [RESP-{tag}] HTTP {resp.status}")
+                print(f"     [RESP-{tag}-BODY] {body[:600]}")
 
-            # Only touch the background-image save request (identified by body)
-            if raw and "saveProfileBackgroundImage" in raw:
-                save_intercepted[0] = True
-                try:
-                    body = _json.loads(raw)
-                    fixed = False
-
-                    # Fix 1 — top-level states
-                    if _clamp_states_list(body.get("states", [])):
-                        fixed = True
-
-                    # Fix 2 — nested requestedArguments.states (duplicate copy)
-                    req_args = body.get("requestedArguments", {})
-                    if isinstance(req_args, dict):
-                        if _clamp_states_list(req_args.get("states", [])):
-                            fixed = True
-
-                    if fixed:
-                        raw = _json.dumps(body)
-                        print("     ✓ Clamped crop coordinates to [0, 1]")
-                    else:
-                        print("     ℹ  Crop coordinates already in range — no clamping needed")
-                except Exception as exc:
-                    print(f"     ⚠  crop-clamp error: {exc}")
-
-            try:
-                route.continue_(post_data=raw) if raw else route.continue_()
-            except Exception:
-                try:
-                    route.continue_()
-                except Exception:
-                    pass
-
-        # Intercept ALL requests via **/* — the save endpoint URL varies and
-        # doesn't include 'saveProfileBackgroundImage' in the URL itself
-        # (it's in the POST body).  Non-POST requests are passed through immediately.
-        page.route("**/*", _clamp_and_forward)
-
-        def _on_save_resp(resp):
-            # Capture the first response that arrives after the save request fired
-            if save_intercepted[0] and not save_resp_body:
-                try:
-                    save_resp_body.append(resp.text()[:2000])
-                except Exception:
-                    pass
-        page.on("response", _on_save_resp)
+        page.on("request",  _capture_req)
+        page.on("response", _capture_resp)
 
         try:
             print(f"  → Opening LinkedIn profile…")
@@ -357,26 +343,48 @@ def upload_banner() -> None:
                 page.screenshot(path=str(REPO_DIR / "debug_upload_failed.png"))
                 sys.exit("✗  Could not trigger file upload → debug_upload_failed.png")
 
-            # Wait for LinkedIn's upload XHR to complete (HTTP 201 back from CDN)
-            # before trying to capture any debug screenshot or save.
-            print("  → Waiting for CDN upload to complete…")
-            try:
-                page.wait_for_response(
-                    lambda r: "profile-uploadedBackgroundImage" in r.url and r.status == 201,
-                    timeout=30_000,
-                )
-                print("     ✓ Display image upload confirmed (201)")
-            except Exception:
-                print("     ⚠  Upload response wait timed out — proceeding anyway")
+            # Attach a CDN response listener for diagnostic logging.
+            # NOTE: based on observed network traffic the CDN upload is triggered
+            # by the profileImageRegister API call that fires when the user clicks
+            # "Save changes" — NOT by the file-chooser.  Waiting for CDN before
+            # clicking Apply is therefore impossible; we log it for information only.
+            cdn_done: list[bool] = [False]
 
-            # Additional settle: wait for network to go idle so the second
-            # upload (profile-original-uploadedBackgroundImage) also finishes.
-            try:
-                page.wait_for_load_state("networkidle", timeout=15_000)
-            except Exception:
-                pass
+            def _detect_cdn(resp) -> None:
+                url    = resp.url
+                status = resp.status
+                if any(k in url for k in ("upload", "dms", "media", "background")) \
+                        and status in (200, 201, 202):
+                    print(f"     [NET] {status} {url[:100]}")
+                if status in (200, 201, 202) and any(k in url for k in (
+                    "uploadedBackgroundImage",
+                    "background-image",
+                    "background_image",
+                    "media-upload",
+                    "dms/upload",
+                    "media/upload",
+                )):
+                    cdn_done[0] = True
+                    print(f"     ✓ CDN upload confirmed (HTTP {status})")
 
-            page.wait_for_timeout(1_000)
+            page.on("response", _detect_cdn)
+
+            # Wait for the crop editor to render before clicking Apply.
+            print("  → Waiting for crop editor to render…")
+            crop_ready = False
+            for _sel in ["button:has-text('Save changes')", "button:has-text('Apply')"]:
+                try:
+                    page.wait_for_selector(_sel, state="attached", timeout=45_000)
+                    crop_ready = True
+                    print("     ✓ Crop editor ready")
+                    break
+                except Exception:
+                    continue
+
+            if not crop_ready:
+                page.screenshot(path=str(REPO_DIR / "debug_04_no_crop.png"))
+                print("     ⚠  Crop editor did not appear — proceeding anyway")
+
             page.screenshot(path=str(REPO_DIR / "debug_04_after_upload.png"))
 
             # ── Click Apply in the crop editor ────────────────────────────────
@@ -425,33 +433,54 @@ def upload_banner() -> None:
                 page.screenshot(path=str(REPO_DIR / "debug_apply_failed.png"))
                 sys.exit("✗  Apply button not found in crop editor → debug_apply_failed.png")
 
-            # Wait for the save response — the response listener fires as soon
-            # as save_intercepted[0] is True (set inside _clamp_and_forward).
+            # Wait for the saveProfileBackgroundImage response and capture it.
+            # This tells us the exact HTTP status + body that the server returns,
+            # which is the most reliable way to diagnose save failures.
             print("  → Waiting for save response…")
+            save_http_status: list[int]  = [0]
+            save_http_body:   list[str]  = [""]
+
+            def _on_save_response(resp) -> None:
+                if "saveProfileBackgroundImage" in resp.url:
+                    save_http_status[0] = resp.status
+                    try:
+                        save_http_body[0] = resp.text()
+                    except Exception:
+                        save_http_body[0] = "<unreadable>"
+                    print(f"     [SAVE-RESP] HTTP {resp.status}")
+                    # Print the first 500 chars of the body for diagnosis
+                    preview = save_http_body[0][:500].replace("\n", " ")
+                    print(f"     [SAVE-RESP] {preview}")
+
+            page.on("response", _on_save_response)
+
+            # Block until the save response arrives.
+            # The full flow (CDN upload for both assets + server processing) can
+            # take 60–90 s after the Apply click, so use a generous timeout.
             try:
-                page.wait_for_timeout(3_000)   # allow response to arrive
+                page.wait_for_response(
+                    lambda r: "saveProfileBackgroundImage" in r.url,
+                    timeout=120_000,
+                )
             except Exception:
-                pass
+                print("     ⚠  Save response not received within 120 s")
+                page.wait_for_timeout(3_000)
 
             page.screenshot(path=str(REPO_DIR / "debug_05_after_apply.png"))
 
-            import re as _re
-            if save_resp_body:
-                resp_text = save_resp_body[0]
-                # LinkedIn SDUI error indicators
-                has_error = any(tok in resp_text for tok in (
-                    '"errors"', '"errorCode"', '"error":', '"errorDetails"',
-                    "Save failed", "Bad Request", '"status":400', '"status":500',
-                ))
-                status_ok = not has_error
-                print(f"  {'✓ Save OK' if status_ok else '✗ Save FAILED'} — server response snippet:")
-                import re as _re
-                m = _re.search(r'"completionAction":\{.*?\}', resp_text, _re.DOTALL)
-                print(f"     {(m.group()[:400] if m else resp_text[:400])}")
+            # Check for a "Save failed" error toast in the UI — definitive signal
+            page.wait_for_timeout(1_000)
+            save_failed_visible = page.locator("text=Save failed").is_visible()
+            if save_failed_visible:
+                status_info = f" (HTTP {save_http_status[0]})" if save_http_status[0] else ""
+                print(f"  ✗ 'Save failed' toast detected in UI{status_info}")
+                body_preview = save_http_body[0][:300].replace("\n", " ")
+                if body_preview:
+                    print(f"     Server said: {body_preview}")
             elif save_intercepted[0]:
-                print("  ✓ Save request intercepted — no response body captured (OK)")
+                print("  ✓ JS patch fired (crop coords clamped) — no error toast visible")
             else:
-                print("  ⚠  Save request was NOT intercepted — crop clamp did not fire")
+                print("  ⚠  JS patch did NOT fire — save request not detected")
 
             # ── After crop Apply there may be a final Save/Confirm step ───────
             # LinkedIn sometimes shows a "Cover photo" dialog again where you
@@ -481,6 +510,19 @@ def upload_banner() -> None:
             page.screenshot(path=str(REPO_DIR / "debug_timeout.png"))
             sys.exit(f"✗  Timeout: {exc}")
         finally:
+            # Write captured request/response data for diagnosis
+            debug_out = REPO_DIR / "debug_save_responses.json"
+            try:
+                debug_out.write_text(
+                    _json.dumps(
+                        {"requests": _key_reqs, "responses": _key_resps},
+                        indent=2,
+                        ensure_ascii=False,
+                    )
+                )
+                print(f"  → Debug responses written → {debug_out.name}")
+            except Exception:
+                pass
             page.close()
             # close() on a CDP-connected browser only disconnects — does NOT
             # quit the Chrome process the user still needs open.
