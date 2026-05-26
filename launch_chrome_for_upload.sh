@@ -1,58 +1,65 @@
 #!/usr/bin/env bash
-# Launch Chrome with remote debugging enabled for the LinkedIn banner uploader.
+# Launch a dedicated Chrome instance for the LinkedIn banner uploader.
 #
-# Chrome REFUSES --remote-debugging-port when pointed at its default profile
-# directory (~/.config/google-chrome).  We work around this by:
-#   1. Copying your real cookies to a separate profile dir (NOT the default).
-#   2. Launching Chrome against that dir with the debug port enabled.
+# Uses a SEPARATE profile dir (~/.config/linkedin-banner-chrome) so it never
+# touches your regular Chrome session.  Your regular Chrome keeps running
+# undisturbed.
 #
-# The GNOME Keyring "Chrome Safe Storage" key is system-wide, so Chrome can
-# decrypt the copied cookie file perfectly — no new login required.
+# Cookie copy strategy:
+#   Uses Python's sqlite3 ".backup" to create a crash-safe snapshot of the
+#   Cookies database even while regular Chrome is open.  No Chrome kill needed.
 #
-# Run once before upload_local.py (Chrome must stay open while the script runs):
-#   ./launch_chrome_for_upload.sh
-#   python3 upload_local.py
+# Usage:
+#   ./launch_chrome_for_upload.sh        # launch; then run upload_local.py
 #
-# Cron (Chrome opened automatically before upload):
-#   0 7 * * * cd /home/lugat/Documents/linkedin-banner && \
-#             ./launch_chrome_for_upload.sh && sleep 8 && \
-#             .venv/bin/python3 upload_local.py >> ~/.linkedin_banner.log 2>&1
+# Systemd (automated daily):
+#   See: ~/.config/systemd/user/linkedin-banner.{service,timer}
 
 CDP_PORT=9222
 CHROME=/usr/bin/google-chrome
-REAL_COOKIES=~/.config/google-chrome/Default/Cookies
-TEMP_DIR=~/.config/linkedin-banner-chrome   # non-default path → debug port allowed
+REAL_COOKIES="${HOME}/.config/google-chrome/Default/Cookies"
+TEMP_DIR="${HOME}/.config/linkedin-banner-chrome"
 
-# ── Already running with debug port ──────────────────────────────────────────
+# ── Already running with debug port? ─────────────────────────────────────────
 if curl -s --max-time 1 "http://localhost:${CDP_PORT}/json/version" >/dev/null 2>&1; then
-    echo "Chrome already running with debug port ${CDP_PORT} — OK."
+    echo "  ✓ CDP Chrome already running on port ${CDP_PORT}."
     exit 0
 fi
 
-# ── Close any Chrome that is running without the debug port ──────────────────
-if pgrep -x "chrome" >/dev/null 2>&1 || pgrep -x "google-chrome" >/dev/null 2>&1; then
-    echo "Closing existing Chrome so we can copy the cookie file safely…"
-    pkill -x "chrome"        2>/dev/null || true
-    pkill -x "google-chrome" 2>/dev/null || true
-    sleep 3
+# ── Kill only the banner-Chrome if it's running without the debug port ────────
+# (Regular Chrome uses ~/.config/google-chrome — we never touch it.)
+if pgrep -f "user-data-dir.*linkedin-banner-chrome" >/dev/null 2>&1; then
+    echo "  → Restarting stale banner-Chrome…"
+    pkill -f "user-data-dir.*linkedin-banner-chrome" 2>/dev/null || true
+    sleep 2
 fi
 
-# ── Copy cookies into the temp profile ───────────────────────────────────────
+# ── Copy cookies via Python sqlite3 backup (safe while Chrome is open) ────────
 mkdir -p "${TEMP_DIR}/Default"
 if [[ -f "${REAL_COOKIES}" ]]; then
-    cp "${REAL_COOKIES}" "${TEMP_DIR}/Default/Cookies"
-    # Copy WAL/SHM if present (usually absent after a clean Chrome exit)
-    cp "${REAL_COOKIES}-wal" "${TEMP_DIR}/Default/Cookies-wal" 2>/dev/null || true
-    cp "${REAL_COOKIES}-shm" "${TEMP_DIR}/Default/Cookies-shm" 2>/dev/null || true
-    echo "  ✓ Cookies copied from real Chrome profile."
+    python3 - <<'PYEOF'
+import os, sys, shutil, sqlite3
+src = os.path.expanduser("~/.config/google-chrome/Default/Cookies")
+dst = os.path.expanduser("~/.config/linkedin-banner-chrome/Default/Cookies")
+try:
+    con = sqlite3.connect(f"file:{src}?mode=ro", uri=True)
+    bak = sqlite3.connect(dst)
+    con.backup(bak)
+    bak.close(); con.close()
+    print("  ✓ Cookies backed up (sqlite3 online backup).")
+except Exception as e:
+    # Fallback: plain copy (works when Chrome is fully closed)
+    shutil.copy2(src, dst)
+    print(f"  ✓ Cookies copied (plain copy; sqlite3 backup failed: {e})")
+PYEOF
 else
-    echo "  ⚠  No Cookies file found at ${REAL_COOKIES}."
-    echo "     You will need to log in to LinkedIn in the Chrome window that opens."
+    echo "  ⚠  No Cookies file at ${REAL_COOKIES}."
+    echo "     Log in to LinkedIn in the Chrome window that opens."
 fi
 
-# ── Launch Chrome with the temp profile + debug port ─────────────────────────
-echo "Launching Chrome with --remote-debugging-port=${CDP_PORT}…"
-"$CHROME" \
+# ── Launch the banner-Chrome with remote debugging ────────────────────────────
+echo "  → Launching banner-Chrome (port ${CDP_PORT})…"
+"${CHROME}" \
     --remote-debugging-port=${CDP_PORT} \
     --user-data-dir="${TEMP_DIR}" \
     --no-first-run \
@@ -62,5 +69,5 @@ echo "Launching Chrome with --remote-debugging-port=${CDP_PORT}…"
     &
 
 CHROME_PID=$!
-echo "Done (PID ${CHROME_PID})."
-echo "Wait ~5 s for LinkedIn to finish loading, then run:  python3 upload_local.py"
+echo "  ✓ Chrome launched (PID ${CHROME_PID})."
+echo "  → Wait ~10 s for LinkedIn to load, then run: python3 upload_local.py"
