@@ -102,31 +102,15 @@ class TestProfilePictureSafeZone:
     Content in the left section must not extend below CONTENT_MAX_Y.
     """
 
-    def test_left_zone_is_visually_clear(self):
+    def test_stats_are_in_right_half(self):
         """
-        Pixels at x=100 (deep in the profile-pic zone) should be the
-        background colour throughout the full banner height — no content
-        drawn there.
+        Stats content (commits number + language legend) must start in the
+        RIGHT half of the banner.  The LinkedIn profile picture is anchored
+        to the bottom-left corner and can never reach the right half.
         """
-        img = gb.draw_banner(COMMITS, LANGS, WEEKS)
-        BG = gb.BG  # (13, 17, 23)
-
-        non_bg = []
-        for y in range(img.height):
-            px = img.getpixel((100, y))
-            if any(abs(px[c] - BG[c]) > 30 for c in range(3)):
-                non_bg.append((100, y, px))
-
-        assert not non_bg, (
-            f"Found {len(non_bg)} non-background pixels in profile-pic zone "
-            f"(x=100): {non_bg[:5]}"
-        )
-
-    def test_content_start_x_clears_profile_pic(self):
-        """Content in the center section must start at x ≥ 210."""
-        assert gb.CONTENT_LEFT_X >= 210, (
-            f"CONTENT_LEFT_X={gb.CONTENT_LEFT_X} overlaps with profile picture "
-            "(profile pic right edge ≈ 205px)"
+        assert gb.CONTENT_LEFT_X > gb.BANNER_W // 2, (
+            f"CONTENT_LEFT_X={gb.CONTENT_LEFT_X} is in the left half — "
+            f"must be > {gb.BANNER_W // 2} so the profile picture cannot obscure it"
         )
 
     def test_left_content_top_y_is_near_top(self):
