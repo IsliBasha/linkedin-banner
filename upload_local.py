@@ -456,15 +456,15 @@ def upload_banner() -> None:
 
             # Block until the save response arrives.
             # The full flow (CDN upload for both assets + server processing) can
-            # take 60–90 s after the Apply click, so use a generous timeout.
+            # take 90–150 s after the Apply click, so use a generous timeout.
             try:
                 page.wait_for_response(
                     lambda r: "saveProfileBackgroundImage" in r.url,
-                    timeout=120_000,
+                    timeout=180_000,
                 )
             except Exception:
-                print("     ⚠  Save response not received within 120 s")
-                page.wait_for_timeout(3_000)
+                print("     ⚠  Save response not received within 180 s")
+                page.wait_for_timeout(5_000)
 
             page.screenshot(path=str(REPO_DIR / "debug_05_after_apply.png"))
 
