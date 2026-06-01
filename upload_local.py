@@ -36,15 +36,20 @@ CDP_PORT    = 9222
 
 # ─────────────────────────────────────────────────────────────────────────────
 
-def pull_latest() -> None:
+def pull_latest(attempts: int = 3, delay: int = 15) -> None:
     print("  → Pulling latest banner from GitHub…")
-    result = subprocess.run(
-        ["git", "pull", "--ff-only"],
-        cwd=REPO_DIR, capture_output=True, text=True,
-    )
-    if result.returncode != 0:
-        sys.exit(f"✗  git pull failed:\n{result.stderr}")
-    print(f"     {result.stdout.strip() or 'Already up to date.'}")
+    for attempt in range(1, attempts + 1):
+        result = subprocess.run(
+            ["git", "pull", "--ff-only"],
+            cwd=REPO_DIR, capture_output=True, text=True,
+        )
+        if result.returncode == 0:
+            print(f"     {result.stdout.strip() or 'Already up to date.'}")
+            return
+        print(f"     ⚠  attempt {attempt}/{attempts} failed: {result.stderr.strip()}")
+        if attempt < attempts:
+            time.sleep(delay)
+    sys.exit(f"✗  git pull failed after {attempts} attempts — upload skipped to avoid stale banner")
 
 
 def wait_for_cdp(timeout: int = 30) -> None:
