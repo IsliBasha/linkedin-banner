@@ -146,24 +146,34 @@ def _select_edit_cover_image(page: Page) -> None:
             "   Check debug_03_cover_not_found.png — LinkedIn may have changed their UI."
         )
     print(f"     ✓ JS-clicked: {cover_result.get('clicked')}")
-    page.wait_for_timeout(2_000)
+    # Wait for the upload dialog to appear instead of sleeping a fixed 2 s.
+    try:
+        page.wait_for_selector(
+            "button:has-text('Upload'), text=Upload photo, text=Change photo",
+            state="visible", timeout=10_000,
+        )
+    except Exception:
+        pass  # _set_upload_file will handle not-found
     page.screenshot(path=str(REPO_DIR / "debug_03_after_cover_click.png"))
 
 
 def _set_upload_file(page: Page, banner_path: Path) -> None:
     """Trigger the file chooser and set banner_path as the upload."""
     upload_text_selectors = [
+        # button:has-text('Upload') is the empirically reliable selector on
+        # LinkedIn's current UI — keep it first to avoid burning 30 s per
+        # failed text= selector (Playwright's default action timeout).
+        "button:has-text('Upload')",
         "text=Change photo",
         "text=Upload photo",
         "text=Upload a photo",
         "text=Upload image",
         "li:has-text('Upload')",
-        "button:has-text('Upload')",
     ]
     for sel in upload_text_selectors:
         try:
             with page.expect_file_chooser(timeout=6_000) as fc_info:
-                page.locator(sel).first.click()
+                page.locator(sel).first.click(timeout=5_000)
             fc_info.value.set_files(str(banner_path))
             print(f"     ✓ File chosen via: {sel}")
             return
@@ -321,7 +331,15 @@ def upload_banner() -> None:
             # ── Navigate to profile ───────────────────────────────────────────
             print(f"  → Opening LinkedIn profile…")
             page.goto(PROFILE_URL, wait_until="domcontentloaded", timeout=45_000)
-            page.wait_for_timeout(5_000)
+            # Wait for the edit button rather than sleeping a fixed 5 s —
+            # returns as soon as the profile header renders, typically 1-2 s.
+            try:
+                page.wait_for_selector(
+                    "button[aria-label*='background' i], button[aria-label*='cover' i]",
+                    state="visible", timeout=15_000,
+                )
+            except Exception:
+                pass  # edit-button loop will handle not-found
             page.screenshot(path=str(REPO_DIR / "debug_01_profile.png"))
 
             current_url = page.url
