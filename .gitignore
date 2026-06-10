@@ -9,7 +9,11 @@ venv/
 .env
 secrets.txt
 
-# Debug screenshots and request captures from upload_local.py
+# Debug/diagnostic screenshots and request captures from upload_local.py
 debug_*.png
 debug_*.json
+diag_*.png
+diag_*.json
 verify*.png
+cdn_*.png
+*_preview.png

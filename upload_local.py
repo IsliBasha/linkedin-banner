@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import datetime
 import json as _json
+import os
 import subprocess
 import sys
 import time
@@ -35,7 +36,7 @@ if TYPE_CHECKING:
 
 REPO_DIR    = Path(__file__).parent.resolve()
 BANNER_PATH = REPO_DIR / "banner.png"
-PROFILE_URL = "https://www.linkedin.com/in/islibasha/"
+PROFILE_URL = os.getenv("LINKEDIN_PROFILE_URL", "https://www.linkedin.com/in/islibasha/")
 CDP_PORT    = 9222
 
 # JS fetch interceptor — clamps floating-point crop coordinates before the
