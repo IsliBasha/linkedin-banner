@@ -146,10 +146,14 @@ def _select_edit_cover_image(page: Page) -> None:
             "   Check debug_03_cover_not_found.png — LinkedIn may have changed their UI."
         )
     print(f"     ✓ JS-clicked: {cover_result.get('clicked')}")
-    # Wait for the upload dialog to appear instead of sleeping a fixed 2 s.
+    # Wait for whichever upload trigger LinkedIn shows — two known dialogs:
+    #  • Simple upload dialog  → "Upload" / "Upload photo" / "Change photo" button
+    #  • "Add a cover image"   → "Upload single photo" button + stock image grid
     try:
         page.wait_for_selector(
-            "button:has-text('Upload'), text=Upload photo, text=Change photo",
+            "button:has-text('Upload single photo'), "
+            "button:has-text('Upload'), "
+            "text=Upload photo, text=Change photo",
             state="visible", timeout=10_000,
         )
     except Exception:
@@ -157,14 +161,67 @@ def _select_edit_cover_image(page: Page) -> None:
     page.screenshot(path=str(REPO_DIR / "debug_03_after_cover_click.png"))
 
 
+def _navigate_to_upload_dialog(page: Page) -> None:
+    """Bridge the intermediate 'Cover photo' dialog (Edit/Change photo/Delete).
+
+    When a cover photo already exists, clicking 'Edit cover image' lands on a
+    'Cover photo' dialog instead of a direct upload dialog.  Clicking 'Change
+    photo' there opens the 'Add a cover image' dialog where 'Upload single
+    photo' triggers the file chooser.
+
+    Uses JS .click() for the same reason as _select_edit_cover_image — Playwright
+    pointer events can dismiss the dialog before the click lands.
+    """
+    # Primary: get_by_text is element-type agnostic — works even if LinkedIn
+    # uses <div> or <li> for the option instead of <button>.
+    try:
+        el = page.get_by_text("Change photo", exact=True).first
+        el.wait_for(state="visible", timeout=6_000)
+        el.click(timeout=5_000)
+        print("     ✓ Clicked 'Change photo' (Cover photo dialog → upload dialog)")
+        try:
+            page.wait_for_selector(
+                "button:has-text('Upload single photo'), button:has-text('Upload')",
+                state="visible", timeout=10_000,
+            )
+        except Exception:
+            pass
+        return
+    except Exception as e:
+        print(f"     ↷ get_by_text('Change photo') failed ({e!r})")
+
+    # Fallback: JS evaluate over all common clickable element types
+    result: bool = page.evaluate("""() => {
+        const els = Array.from(document.querySelectorAll(
+            'button, a, div[role="button"], li, span[tabindex]'
+        ));
+        const target = els.find(e =>
+            (e.getAttribute('aria-label') || '').toLowerCase().includes('change photo') ||
+            (e.textContent || '').toLowerCase().includes('change photo')
+        );
+        if (target) { target.click(); return true; }
+        return false;
+    }""")
+    if result:
+        print("     ✓ JS-clicked 'Change photo' via fallback selector")
+        try:
+            page.wait_for_selector(
+                "button:has-text('Upload single photo'), button:has-text('Upload')",
+                state="visible", timeout=10_000,
+            )
+        except Exception:
+            pass
+    else:
+        print("     ↷ No 'Cover photo' intermediate dialog — already on upload surface")
+
+
 def _set_upload_file(page: Page, banner_path: Path) -> None:
     """Trigger the file chooser and set banner_path as the upload."""
     upload_text_selectors = [
-        # button:has-text('Upload') is the empirically reliable selector on
-        # LinkedIn's current UI — keep it first to avoid burning 30 s per
-        # failed text= selector (Playwright's default action timeout).
+        # "Add a cover image" dialog — appears after _navigate_to_upload_dialog
+        "button:has-text('Upload single photo')",
+        # Simple upload dialog — appears when no cover photo exists yet
         "button:has-text('Upload')",
-        "text=Change photo",
         "text=Upload photo",
         "text=Upload a photo",
         "text=Upload image",
@@ -357,6 +414,9 @@ def upload_banner() -> None:
 
             print("  → Selecting 'Edit cover image'…")
             _select_edit_cover_image(page)
+
+            print("  → Navigating to upload dialog…")
+            _navigate_to_upload_dialog(page)
 
             # ── Upload file ───────────────────────────────────────────────────
             print("  → Uploading banner.png…")
