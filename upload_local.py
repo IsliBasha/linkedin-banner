@@ -28,11 +28,20 @@ import sys
 import time
 import urllib.request
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from playwright.sync_api import ConsoleMessage, Page, Request, Response
 
 REPO_DIR    = Path(__file__).parent.resolve()
 BANNER_PATH = REPO_DIR / "banner.png"
 PROFILE_URL = "https://www.linkedin.com/in/islibasha/"
 CDP_PORT    = 9222
+
+# JS fetch interceptor — clamps floating-point crop coordinates before the
+# saveProfileBackgroundImage request fires.  Lives in crop_patch.js so it can
+# be edited and linted independently of this file.
+_CROP_PATCH_JS = (REPO_DIR / "crop_patch.js").read_text()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -71,6 +80,147 @@ def wait_for_cdp(timeout: int = 30) -> None:
     )
 
 
+# ── Upload sub-steps ──────────────────────────────────────────────────────────
+
+def _click_background_edit_btn(page: Page) -> None:
+    """Click the background/cover-photo edit button on the LinkedIn profile page."""
+    edit_selectors = [
+        "button[aria-label*='background' i]",
+        "button[aria-label*='cover' i]",
+        "button[aria-label*='Edit background' i]",
+        ".profile-topcard-background-image-upload-btn",
+        "button:has-text('Edit background')",
+        "button:has-text('Edit cover')",
+    ]
+    clicked = False
+    for sel in edit_selectors:
+        try:
+            btn = page.locator(sel).first
+            btn.wait_for(state="visible", timeout=4_000)
+            btn.scroll_into_view_if_needed()
+            btn.click()
+            # Wait for the dropdown menu to appear instead of sleeping blindly.
+            page.wait_for_selector("[role='menu']", state="visible", timeout=5_000)
+            page.screenshot(path=str(REPO_DIR / "debug_02_after_edit_click.png"))
+            clicked = True
+            print(f"     ✓ Clicked: {sel}")
+            break
+        except Exception as e:
+            print(f"     ↷ {sel!r} failed: {e}")
+            continue
+
+    if not clicked:
+        page.screenshot(path=str(REPO_DIR / "debug_no_edit_btn.png"))
+        sys.exit(
+            "✗  Background-edit button not found.\n"
+            "   Check debug_no_edit_btn.png — make sure you're on your own profile."
+        )
+
+
+def _select_edit_cover_image(page: Page) -> None:
+    """Select 'Edit cover image' from the open dropdown via JS .click().
+
+    Playwright's .click() fires pointer/focus events that dismiss the menu
+    before the click lands.  JS element.click() fires immediately while the
+    menu is still open.  By the time this function is called the menu is
+    already confirmed visible by _click_background_edit_btn.
+    """
+    cover_result: dict = page.evaluate("""() => {
+        const menu = document.querySelector("[role='menu']");
+        if (!menu) return {ok: false, reason: 'no menu'};
+        const items = Array.from(menu.querySelectorAll('a, button, [role="menuitem"]'));
+        const target = items.find(el =>
+            (el.getAttribute('aria-label') || '').toLowerCase().includes('edit cover') ||
+            (el.innerText || '').toLowerCase().includes('edit cover image')
+        );
+        if (!target) return {ok: false, reason: 'item not found',
+            found: items.map(el => el.getAttribute('aria-label') || el.innerText?.trim())};
+        target.click();
+        return {ok: true, clicked: target.tagName + ' / ' + (target.getAttribute('aria-label') || target.innerText?.trim())};
+    }""")
+    if not cover_result.get("ok"):
+        page.screenshot(path=str(REPO_DIR / "debug_03_cover_not_found.png"))
+        sys.exit(
+            f"✗  'Edit cover image' option not found in dropdown: {cover_result}\n"
+            "   Check debug_03_cover_not_found.png — LinkedIn may have changed their UI."
+        )
+    print(f"     ✓ JS-clicked: {cover_result.get('clicked')}")
+    page.wait_for_timeout(2_000)
+    page.screenshot(path=str(REPO_DIR / "debug_03_after_cover_click.png"))
+
+
+def _set_upload_file(page: Page, banner_path: Path) -> None:
+    """Trigger the file chooser and set banner_path as the upload."""
+    upload_text_selectors = [
+        "text=Change photo",
+        "text=Upload photo",
+        "text=Upload a photo",
+        "text=Upload image",
+        "li:has-text('Upload')",
+        "button:has-text('Upload')",
+    ]
+    for sel in upload_text_selectors:
+        try:
+            with page.expect_file_chooser(timeout=6_000) as fc_info:
+                page.locator(sel).first.click()
+            fc_info.value.set_files(str(banner_path))
+            print(f"     ✓ File chosen via: {sel}")
+            return
+        except Exception as e:
+            print(f"     ↷ {sel!r} failed: {e}")
+            continue
+
+    # Fallback — try the hidden file input directly
+    try:
+        page.locator("input[type='file']").first.set_input_files(str(banner_path))
+        print("     ✓ File set via hidden <input type='file'>")
+        return
+    except Exception:
+        pass
+
+    page.screenshot(path=str(REPO_DIR / "debug_upload_failed.png"))
+    sys.exit("✗  Could not trigger file upload → debug_upload_failed.png")
+
+
+def _click_apply_crop(page: Page) -> None:
+    """Click the Apply/Save changes button in LinkedIn's crop editor."""
+    # Strategy 1: scroll-into-view then Playwright click
+    for sel in [
+        "button:has-text('Save changes')",
+        "button:has-text('Apply')",
+        "button[aria-label='Apply']",
+    ]:
+        try:
+            btn = page.locator(sel).last
+            btn.wait_for(state="attached", timeout=8_000)
+            btn.scroll_into_view_if_needed()
+            page.wait_for_timeout(500)   # let scroll animation settle before click
+            btn.click()
+            print(f"     ✓ Clicked Apply via: {sel}")
+            return
+        except Exception as e:
+            print(f"     ↷ {sel!r} failed: {e}")
+            continue
+
+    # Strategy 2: JS click (works even when Playwright thinks button is off-screen)
+    result: str | None = page.evaluate("""() => {
+        const btns = Array.from(document.querySelectorAll('button'));
+        const applyBtn = btns.find(b =>
+            (b.textContent.trim() === 'Save changes' ||
+             b.textContent.trim() === 'Apply') &&
+            b.offsetParent !== null
+        );
+        if (applyBtn) { applyBtn.click(); return applyBtn.textContent.trim(); }
+        return null;
+    }""")
+    if result:
+        print(f"     ✓ Clicked Apply via JS ({result})")
+        return
+
+    page.screenshot(path=str(REPO_DIR / "debug_apply_failed.png"))
+    sys.exit("✗  Apply button not found in crop editor → debug_apply_failed.png")
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 
 def upload_banner() -> None:
@@ -88,7 +238,7 @@ def upload_banner() -> None:
 
         ctx = contexts[0]
 
-        # ── Verify we have an authenticated LinkedIn session ──────────────────
+        # ── Verify authenticated LinkedIn session ─────────────────────────────
         li_at  = next((c for c in ctx.cookies() if c["name"] == "li_at"),  None)
         jsid   = next((c for c in ctx.cookies() if c["name"] == "JSESSIONID"), None)
 
@@ -106,115 +256,34 @@ def upload_banner() -> None:
         print(f"     li_at:     ✓")
         print(f"     JSESSIONID: {jsid_preview}")
 
-        # ── Open a new tab and navigate to the profile ────────────────────────
+        # ── Open a new tab ────────────────────────────────────────────────────
         page = ctx.new_page()
         # Tall viewport so dialogs (esp. the crop editor's Apply button) don't
         # get clipped.  Must be set before navigation.
         page.set_viewport_size({"width": 1280, "height": 1100})
 
-        # ── Crop-coordinate clamp — JavaScript fetch interceptor ─────────────
+        # ── Crop-coordinate clamp — JS fetch interceptor ──────────────────────
         # LinkedIn's crop editor generates floating-point drift in the rotation
         # matrix (e.g. bottomLeft.x = -6.12e-17, bottomRight.y = 1.000000001).
         # The server rejects any coordinate outside [0, 1].
-        #
-        # Strategy: inject a JS fetch interceptor that clamps the coords using
-        # LinkedIn's own JSON.stringify — this avoids any encoding/type mismatch
-        # that the Playwright Python-level route.continue_(post_data=...) approach
-        # caused (which resulted in "Save failed" toasts despite clamping).
-        #
-        # The interceptor runs at page-init time (add_init_script) so it is
-        # active for every navigation on this page, including the profile page.
+        # Injected at page-init time so it is active for every navigation on
+        # this page, including the profile page.  See crop_patch.js for details.
+        page.add_init_script(_CROP_PATCH_JS)
 
-        _JS_CLAMP_PATCH = """
-(function () {
-    if (window.__bannerCropPatchInstalled) return;
-    window.__bannerCropPatchInstalled = true;
-
-    // Clamp and clean a single coordinate value:
-    //  - values within 1e-9 of 0 → exact 0
-    //  - values within 1e-9 of 1 → exact 1
-    //  - all others → clamped to [0, 1]
-    // LinkedIn's crop editor generates values like 9.8e-16 (should be 0) and
-    // 1.000000000000001 (should be 1) due to rotation-matrix floating-point drift.
-    // Servers often require exact 0.0 / 1.0 at the corners of a full-image crop.
-    function cleanCoord(v) {
-        var n = Number(v);
-        if (Math.abs(n) < 1e-9)     return 0;
-        if (Math.abs(n - 1) < 1e-9) return 1;
-        return Math.max(0, Math.min(1, n));
-    }
-
-    function clampStates(states) {
-        if (!Array.isArray(states)) return false;
-        var fixed = false;
-        states.forEach(function (state) {
-            var val = state && state.value;
-            if (!val || typeof val !== 'object' || !val.mediaFiles) return;
-            (val.mediaFiles || []).forEach(function (mf) {
-                var cr = mf && mf.editData && mf.editData.croppedRegion;
-                if (!cr || typeof cr !== 'object') return;
-                ['topLeft','topRight','bottomLeft','bottomRight'].forEach(function (corner) {
-                    var pt = cr[corner];
-                    if (!pt) return;
-                    ['x','y'].forEach(function (ax) {
-                        var v = pt[ax];
-                        if (v !== undefined && v !== null) {
-                            var c = cleanCoord(v);
-                            if (c !== v) { pt[ax] = c; fixed = true; }
-                        }
-                    });
-                });
-            });
-        });
-        return fixed;
-    }
-
-    var origFetch = window.fetch;
-    window.fetch = function (url, options) {
-        var rest = Array.prototype.slice.call(arguments, 2);
-        // Only intercept the actual save endpoint (match by URL, not body content).
-        // profileImageRegister body also contains 'saveProfileBackgroundImage' as a
-        // next-action reference, so body-content matching would over-fire.
-        var isSave = typeof url === 'string' &&
-            url.indexOf('saveProfileBackgroundImage') !== -1;
-        if (isSave && options && options.body && typeof options.body === 'string') {
-            try {
-                var body = JSON.parse(options.body);
-                var f1 = clampStates(body.states || []);
-                var f2 = clampStates(((body.requestedArguments || {}).states) || []);
-                if (f1 || f2) {
-                    console.log('[BannerPatch] clamped crop coords → ' + url);
-                    options = Object.assign({}, options, {body: JSON.stringify(body)});
-                } else {
-                    console.log('[BannerPatch] save endpoint — coords already clean');
-                }
-            } catch (e) {
-                console.error('[BannerPatch] parse error:', e);
-            }
-        }
-        return origFetch.apply(this, [url, options].concat(rest));
-    };
-    console.log('[BannerPatch] fetch interceptor installed');
-})();
-"""
-        # Install before any navigation so it is active on the profile page
-        page.add_init_script(_JS_CLAMP_PATCH)
-
-        # Track when the JS patch fires (via console messages)
         save_intercepted: list[bool] = [False]
 
-        def _on_console(msg):
+        def _on_console(msg: ConsoleMessage) -> None:
             if "BannerPatch" in msg.text:
                 save_intercepted[0] = True
                 print(f"     [JS] {msg.text}")
+
         page.on("console", _on_console)
 
-        # Capture full request + response for profileImageRegister and
-        # saveProfileBackgroundImage so we can diagnose failures.
-        _key_reqs:   list[dict] = []
-        _key_resps:  list[dict] = []
+        # ── Network capture — full req/resp for diagnosis ─────────────────────
+        _key_reqs:  list[dict] = []
+        _key_resps: list[dict] = []
 
-        def _capture_req(req) -> None:
+        def _capture_req(req: Request) -> None:
             if any(k in req.url for k in (
                 "saveProfileBackgroundImage", "profileImageRegister",
             )):
@@ -227,7 +296,7 @@ def upload_banner() -> None:
                 _key_reqs.append({"tag": tag, "url": req.url, "body": body})
                 print(f"     [REQ-{tag}] {req.url[:100]}")
 
-        def _capture_resp(resp) -> None:
+        def _capture_resp(resp: Response) -> None:
             if any(k in resp.url for k in (
                 "saveProfileBackgroundImage", "profileImageRegister",
             )):
@@ -248,6 +317,7 @@ def upload_banner() -> None:
         page.on("response", _capture_resp)
 
         try:
+            # ── Navigate to profile ───────────────────────────────────────────
             print(f"  → Opening LinkedIn profile…")
             page.goto(PROFILE_URL, wait_until="domcontentloaded", timeout=45_000)
             page.wait_for_timeout(5_000)
@@ -262,114 +332,24 @@ def upload_banner() -> None:
                 )
             print(f"     ✓ Profile loaded  ({current_url})")
 
-            # ── Click the background / cover-photo edit button ────────────────
+            # ── Edit cover photo ──────────────────────────────────────────────
             print("  → Opening background-photo editor…")
-            edit_selectors = [
-                "button[aria-label*='background' i]",
-                "button[aria-label*='cover' i]",
-                "button[aria-label*='Edit background' i]",
-                ".profile-topcard-background-image-upload-btn",
-                "button:has-text('Edit background')",
-                "button:has-text('Edit cover')",
-            ]
-            clicked = False
-            for sel in edit_selectors:
-                try:
-                    btn = page.locator(sel).first
-                    btn.wait_for(state="visible", timeout=4_000)
-                    btn.scroll_into_view_if_needed()
-                    btn.click()
-                    page.wait_for_timeout(1_500)
-                    page.screenshot(path=str(REPO_DIR / "debug_02_after_edit_click.png"))
-                    clicked = True
-                    print(f"     ✓ Clicked: {sel}")
-                    break
-                except Exception as e:
-                    print(f"     ↷ {sel!r} failed: {e}")
-                    continue
+            _click_background_edit_btn(page)
 
-            if not clicked:
-                page.screenshot(path=str(REPO_DIR / "debug_no_edit_btn.png"))
-                sys.exit(
-                    "✗  Background-edit button not found.\n"
-                    "   Check debug_no_edit_btn.png — make sure you're on your own profile."
-                )
-
-            # ── Click "Edit cover image" in the dropdown ──────────────────────
-            # Playwright's .click() fires pointer/focus events that dismiss the menu
-            # before the click lands. Use JS element.click() instead — it fires
-            # immediately while the menu is still open.
             print("  → Selecting 'Edit cover image'…")
-            page.wait_for_timeout(800)
-            cover_result = page.evaluate("""() => {
-                const menu = document.querySelector("[role='menu']");
-                if (!menu) return {ok: false, reason: 'no menu'};
-                const items = Array.from(menu.querySelectorAll('a, button, [role="menuitem"]'));
-                const target = items.find(el =>
-                    (el.getAttribute('aria-label') || '').toLowerCase().includes('edit cover') ||
-                    (el.innerText || '').toLowerCase().includes('edit cover image')
-                );
-                if (!target) return {ok: false, reason: 'item not found',
-                    found: items.map(el => el.getAttribute('aria-label') || el.innerText?.trim())};
-                target.click();
-                return {ok: true, clicked: target.tagName + ' / ' + (target.getAttribute('aria-label') || target.innerText?.trim())};
-            }""")
-            if not cover_result.get("ok"):
-                page.screenshot(path=str(REPO_DIR / "debug_03_cover_not_found.png"))
-                sys.exit(
-                    f"✗  'Edit cover image' option not found in dropdown: {cover_result}\n"
-                    "   Check debug_03_cover_not_found.png — LinkedIn may have changed their UI."
-                )
-            print(f"     ✓ JS-clicked: {cover_result.get('clicked')}")
-            page.wait_for_timeout(2_000)
-            page.screenshot(path=str(REPO_DIR / "debug_03_after_cover_click.png"))
+            _select_edit_cover_image(page)
 
-            # ── Upload the banner file ────────────────────────────────────────
+            # ── Upload file ───────────────────────────────────────────────────
             print("  → Uploading banner.png…")
-            uploaded = False
-            upload_text_selectors = [
-                "text=Change photo",
-                "text=Upload photo",
-                "text=Upload a photo",
-                "text=Upload image",
-                "li:has-text('Upload')",
-                "button:has-text('Upload')",
-            ]
-            for sel in upload_text_selectors:
-                try:
-                    with page.expect_file_chooser(timeout=6_000) as fc_info:
-                        page.locator(sel).first.click()
-                    fc_info.value.set_files(str(BANNER_PATH))
-                    uploaded = True
-                    print(f"     ✓ File chosen via: {sel}")
-                    break
-                except Exception as e:
-                    print(f"     ↷ {sel!r} failed: {e}")
-                    continue
+            _set_upload_file(page, BANNER_PATH)
 
-            if not uploaded:
-                # Fallback — try the hidden file input directly
-                try:
-                    page.locator("input[type='file']").first.set_input_files(
-                        str(BANNER_PATH)
-                    )
-                    uploaded = True
-                    print("     ✓ File set via hidden <input type='file'>")
-                except Exception:
-                    pass
-
-            if not uploaded:
-                page.screenshot(path=str(REPO_DIR / "debug_upload_failed.png"))
-                sys.exit("✗  Could not trigger file upload → debug_upload_failed.png")
-
-            # Attach a CDN response listener for diagnostic logging.
-            # NOTE: based on observed network traffic the CDN upload is triggered
-            # by the profileImageRegister API call that fires when the user clicks
-            # "Save changes" — NOT by the file-chooser.  Waiting for CDN before
-            # clicking Apply is therefore impossible; we log it for information only.
+            # Attach CDN response listener for diagnostic logging.
+            # NOTE: CDN upload is triggered by profileImageRegister when the user
+            # clicks "Save changes" — NOT by the file-chooser.  We log it for
+            # information only; it is not a gate for clicking Apply.
             cdn_done: list[bool] = [False]
 
-            def _detect_cdn(resp) -> None:
+            def _detect_cdn(resp: Response) -> None:
                 url    = resp.url
                 status = resp.status
                 if any(k in url for k in ("upload", "dms", "media", "background")) \
@@ -388,7 +368,7 @@ def upload_banner() -> None:
 
             page.on("response", _detect_cdn)
 
-            # Wait for the crop editor to render before clicking Apply.
+            # ── Wait for crop editor ──────────────────────────────────────────
             print("  → Waiting for crop editor to render…")
             crop_ready = False
             for _sel in ["button:has-text('Save changes')", "button:has-text('Apply')"]:
@@ -406,60 +386,18 @@ def upload_banner() -> None:
 
             page.screenshot(path=str(REPO_DIR / "debug_04_after_upload.png"))
 
-            # ── Click Apply in the crop editor ────────────────────────────────
+            # ── Apply crop ────────────────────────────────────────────────────
             print("  → Applying crop…")
-            page.wait_for_timeout(1_000)
+            _click_apply_crop(page)
 
-            applied = False
-
-            # Strategy 1: scroll-into-view then click, trying specific selectors
-            for sel in [
-                "button:has-text('Save changes')",
-                "button:has-text('Apply')",
-                "button[aria-label='Apply']",
-            ]:
-                try:
-                    btn = page.locator(sel).last
-                    btn.wait_for(state="attached", timeout=8_000)
-                    btn.scroll_into_view_if_needed()
-                    page.wait_for_timeout(500)
-                    btn.click()
-                    applied = True
-                    print(f"     ✓ Clicked Apply via: {sel}")
-                    break
-                except Exception:
-                    continue
-
-            # Strategy 2: JavaScript click on the Apply button (works even if
-            # Playwright thinks it's off-screen)
-            if not applied:
-                result = page.evaluate("""() => {
-                    const btns = Array.from(document.querySelectorAll('button'));
-                    // Prefer exact text match inside a modal/dialog
-                    const applyBtn = btns.find(b =>
-                        (b.textContent.trim() === 'Save changes' ||
-                         b.textContent.trim() === 'Apply') &&
-                        b.offsetParent !== null
-                    );
-                    if (applyBtn) { applyBtn.click(); return applyBtn.textContent.trim(); }
-                    return null;
-                }""")
-                if result:
-                    applied = True
-                    print(f"     ✓ Clicked Apply via JS ({result})")
-
-            if not applied:
-                page.screenshot(path=str(REPO_DIR / "debug_apply_failed.png"))
-                sys.exit("✗  Apply button not found in crop editor → debug_apply_failed.png")
-
-            # Wait for the saveProfileBackgroundImage response and capture it.
-            # This tells us the exact HTTP status + body that the server returns,
-            # which is the most reliable way to diagnose save failures.
+            # ── Wait for save response ────────────────────────────────────────
+            # The full flow (CDN upload for both assets + server processing) can
+            # take 90–150 s after the Apply click, so use a generous timeout.
             print("  → Waiting for save response…")
-            save_http_status: list[int]  = [0]
-            save_http_body:   list[str]  = [""]
+            save_http_status: list[int] = [0]
+            save_http_body:   list[str] = [""]
 
-            def _on_save_response(resp) -> None:
+            def _on_save_response(resp: Response) -> None:
                 if "saveProfileBackgroundImage" in resp.url:
                     save_http_status[0] = resp.status
                     try:
@@ -467,15 +405,11 @@ def upload_banner() -> None:
                     except Exception:
                         save_http_body[0] = "<unreadable>"
                     print(f"     [SAVE-RESP] HTTP {resp.status}")
-                    # Print the first 500 chars of the body for diagnosis
                     preview = save_http_body[0][:500].replace("\n", " ")
                     print(f"     [SAVE-RESP] {preview}")
 
             page.on("response", _on_save_response)
 
-            # Block until the save response arrives.
-            # The full flow (CDN upload for both assets + server processing) can
-            # take 90–150 s after the Apply click, so use a generous timeout.
             try:
                 page.wait_for_response(
                     lambda r: "saveProfileBackgroundImage" in r.url,
@@ -487,7 +421,7 @@ def upload_banner() -> None:
 
             page.screenshot(path=str(REPO_DIR / "debug_05_after_apply.png"))
 
-            # Check for a "Save failed" error toast in the UI — definitive signal
+            # ── Check for save-failed toast ───────────────────────────────────
             page.wait_for_timeout(1_000)
             save_failed_visible = page.locator("text=Save failed").is_visible()
             if save_failed_visible:
@@ -501,7 +435,7 @@ def upload_banner() -> None:
             else:
                 print("  ⚠  JS patch did NOT fire — save request not detected")
 
-            # ── After crop Apply there may be a final Save/Confirm step ───────
+            # ── Final Save step ───────────────────────────────────────────────
             # LinkedIn sometimes shows a "Cover photo" dialog again where you
             # must click Save to commit the change.
             print("  → Checking for final Save step…")
@@ -521,7 +455,6 @@ def upload_banner() -> None:
                 except Exception:
                     continue
 
-            # If no Save dialog appeared the Apply already committed the change
             page.screenshot(path=str(REPO_DIR / "debug_06_done.png"))
             print("  ✓ Banner applied (no extra Save step needed)")
 
@@ -529,7 +462,6 @@ def upload_banner() -> None:
             page.screenshot(path=str(REPO_DIR / "debug_timeout.png"))
             sys.exit(f"✗  Timeout: {exc}")
         finally:
-            # Write captured request/response data for diagnosis
             debug_out = REPO_DIR / "debug_save_responses.json"
             try:
                 debug_out.write_text(
