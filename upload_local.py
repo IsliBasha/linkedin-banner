@@ -22,6 +22,7 @@ CRON (daily at 07:00 — Chrome opened automatically)
 from __future__ import annotations
 
 import datetime
+import json as _json
 import subprocess
 import sys
 import time
@@ -210,7 +211,6 @@ def upload_banner() -> None:
 
         # Capture full request + response for profileImageRegister and
         # saveProfileBackgroundImage so we can diagnose failures.
-        import json as _json
         _key_reqs:   list[dict] = []
         _key_resps:  list[dict] = []
 
@@ -284,7 +284,8 @@ def upload_banner() -> None:
                     clicked = True
                     print(f"     ✓ Clicked: {sel}")
                     break
-                except Exception:
+                except Exception as e:
+                    print(f"     ↷ {sel!r} failed: {e}")
                     continue
 
             if not clicked:
@@ -295,29 +296,41 @@ def upload_banner() -> None:
                 )
 
             # ── Click "Edit cover image" in the dropdown ──────────────────────
+            # Playwright's .click() fires pointer/focus events that dismiss the menu
+            # before the click lands. Use JS element.click() instead — it fires
+            # immediately while the menu is still open.
             print("  → Selecting 'Edit cover image'…")
-            for sel in [
-                "text=Edit cover image",
-                "text=Edit cover",
-                "text=Change cover",
-                "li:has-text('Edit cover')",
-            ]:
-                try:
-                    page.locator(sel).first.click(timeout=5_000)
-                    page.wait_for_timeout(2_000)
-                    page.screenshot(path=str(REPO_DIR / "debug_03_after_cover_click.png"))
-                    print(f"     ✓ Clicked: {sel}")
-                    break
-                except Exception:
-                    continue
+            page.wait_for_timeout(800)
+            cover_result = page.evaluate("""() => {
+                const menu = document.querySelector("[role='menu']");
+                if (!menu) return {ok: false, reason: 'no menu'};
+                const items = Array.from(menu.querySelectorAll('a, button, [role="menuitem"]'));
+                const target = items.find(el =>
+                    (el.getAttribute('aria-label') || '').toLowerCase().includes('edit cover') ||
+                    (el.innerText || '').toLowerCase().includes('edit cover image')
+                );
+                if (!target) return {ok: false, reason: 'item not found',
+                    found: items.map(el => el.getAttribute('aria-label') || el.innerText?.trim())};
+                target.click();
+                return {ok: true, clicked: target.tagName + ' / ' + (target.getAttribute('aria-label') || target.innerText?.trim())};
+            }""")
+            if not cover_result.get("ok"):
+                page.screenshot(path=str(REPO_DIR / "debug_03_cover_not_found.png"))
+                sys.exit(
+                    f"✗  'Edit cover image' option not found in dropdown: {cover_result}\n"
+                    "   Check debug_03_cover_not_found.png — LinkedIn may have changed their UI."
+                )
+            print(f"     ✓ JS-clicked: {cover_result.get('clicked')}")
+            page.wait_for_timeout(2_000)
+            page.screenshot(path=str(REPO_DIR / "debug_03_after_cover_click.png"))
 
             # ── Upload the banner file ────────────────────────────────────────
             print("  → Uploading banner.png…")
             uploaded = False
             upload_text_selectors = [
+                "text=Change photo",
                 "text=Upload photo",
                 "text=Upload a photo",
-                "text=Change photo",
                 "text=Upload image",
                 "li:has-text('Upload')",
                 "button:has-text('Upload')",
@@ -330,7 +343,8 @@ def upload_banner() -> None:
                     uploaded = True
                     print(f"     ✓ File chosen via: {sel}")
                     break
-                except Exception:
+                except Exception as e:
+                    print(f"     ↷ {sel!r} failed: {e}")
                     continue
 
             if not uploaded:
