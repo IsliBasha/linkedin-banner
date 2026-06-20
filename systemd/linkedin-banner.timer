@@ -1,0 +1,16 @@
+[Unit]
+Description=Daily LinkedIn banner upload (08:45 CEST)
+
+[Timer]
+# 08:45 local time — GitHub Actions commits the new banner at ~06:05 UTC
+# (08:05 CEST), so 08:45 gives plenty of buffer.
+OnCalendar=*-*-* 08:45:00
+
+# Persistent=true: if the machine was off at 08:45, the job runs on next login.
+# This ensures no day is ever silently skipped.
+Persistent=true
+
+Unit=linkedin-banner.service
+
+[Install]
+WantedBy=timers.target

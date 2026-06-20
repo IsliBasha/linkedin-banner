@@ -1,0 +1,39 @@
+[Unit]
+Description=Upload LinkedIn banner to profile
+# Wait for network and a graphical session before running.
+# With Persistent=true on the timer, this fires right after login on days
+# the machine was off at the scheduled time.
+After=network-online.target graphical-session.target
+Wants=network-online.target graphical-session.target
+
+[Service]
+Type=oneshot
+
+# ── Environment ───────────────────────────────────────────────────────────────
+# DISPLAY=:0 is the standard X11/XWayland display on GNOME Ubuntu.
+# HOME must be set explicitly so tilde expansion in scripts works correctly
+# under systemd.
+# XAUTHORITY must be set explicitly — systemd strips it from the environment,
+# causing Chrome to get "Invalid MIT-MAGIC-COOKIE-1 key" and crash immediately.
+Environment=DISPLAY=:0
+Environment=HOME=/home/lugat
+Environment=XAUTHORITY=/home/lugat/.Xauthority
+
+WorkingDirectory=/home/lugat/Documents/linkedin-banner
+
+# ── Steps ─────────────────────────────────────────────────────────────────────
+# 1. Launch / verify the dedicated CDP Chrome (does not touch regular Chrome)
+ExecStartPre=/bin/bash /home/lugat/Documents/linkedin-banner/launch_chrome_for_upload.sh
+# 2. Give LinkedIn time to fully load in Chrome
+ExecStartPre=/bin/sleep 12
+# 3. Pull latest banner.png and upload to LinkedIn
+ExecStart=/home/lugat/Documents/linkedin-banner/.venv/bin/python3 \
+          /home/lugat/Documents/linkedin-banner/upload_local.py
+
+# ── Logging ───────────────────────────────────────────────────────────────────
+StandardOutput=append:/home/lugat/.linkedin_banner.log
+StandardError=append:/home/lugat/.linkedin_banner.log
+
+# ── Limits ────────────────────────────────────────────────────────────────────
+# Allow up to 5 minutes for the full upload flow (CDN + save can take ~2 min)
+TimeoutStartSec=300
