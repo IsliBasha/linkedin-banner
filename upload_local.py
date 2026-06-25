@@ -49,6 +49,8 @@ _CROP_PATCH_JS = (REPO_DIR / "crop_patch.js").read_text()
 
 def pull_latest(attempts: int = 3, delay: int = 15) -> None:
     print("  → Pulling latest banner from GitHub…")
+    # banner.png is a generated binary — discard local modifications before pulling
+    subprocess.run(["git", "restore", "banner.png"], cwd=REPO_DIR, capture_output=True)
     for attempt in range(1, attempts + 1):
         result = subprocess.run(
             ["git", "pull", "--ff-only"],

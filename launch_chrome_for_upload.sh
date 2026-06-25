@@ -57,6 +57,14 @@ else
     echo "     Log in to LinkedIn in the Chrome window that opens."
 fi
 
+# ── Wait for X display to be ready (race condition on login with Persistent=true) ─
+_DISP="${DISPLAY:-:0}"
+for _i in $(seq 1 30); do
+    xdpyinfo -display "${_DISP}" >/dev/null 2>&1 && break
+    echo "  → Waiting for display ${_DISP} (${_i}/30)…"
+    sleep 2
+done
+
 # ── Launch the banner-Chrome with remote debugging ────────────────────────────
 echo "  → Launching banner-Chrome (port ${CDP_PORT})…"
 "${CHROME}" \
