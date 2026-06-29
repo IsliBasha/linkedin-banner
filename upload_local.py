@@ -293,20 +293,24 @@ def _click_apply_crop(page: Page) -> None:
 
 # ─────────────────────────────────────────────────────────────────────────────
 
-def upload_banner() -> None:
+def upload_banner(inject_cookies: list | None = None) -> None:
     from playwright.sync_api import TimeoutError as PWTimeout, sync_playwright
 
     print("  → Connecting to Chrome via CDP…")
     with sync_playwright() as p:
         browser = p.chromium.connect_over_cdp(f"http://localhost:{CDP_PORT}")
 
-        # Use the first existing browser context (the real session)
-        contexts = browser.contexts
-        if not contexts:
-            browser.close()
-            sys.exit("✗  No browser context found — is LinkedIn open in Chrome?")
-
-        ctx = contexts[0]
+        if inject_cookies:
+            # CI mode: fresh Chrome session → create isolated context and inject cookies
+            ctx = browser.new_context()
+            ctx.add_cookies(inject_cookies)
+        else:
+            # Local mode: reuse the existing logged-in Chrome session
+            contexts = browser.contexts
+            if not contexts:
+                browser.close()
+                sys.exit("✗  No browser context found — is LinkedIn open in Chrome?")
+            ctx = contexts[0]
 
         # ── Verify authenticated LinkedIn session ─────────────────────────────
         li_at  = next((c for c in ctx.cookies() if c["name"] == "li_at"),  None)
