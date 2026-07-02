@@ -11,7 +11,7 @@ Usage (GitHub Actions step):
     python3 upload_ci.py
 
 Local testing:
-    export LINKEDIN_COOKIES="$(python3 export_linkedin_cookies.py | grep -A1 'Add this' | tail -1)"
+    export LINKEDIN_COOKIES="$(python3 export_linkedin_cookies.py | grep -E '^[A-Za-z0-9+/=]{50,}$')"
     python3 upload_ci.py
 """
 
