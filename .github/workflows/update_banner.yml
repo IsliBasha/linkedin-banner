@@ -70,6 +70,12 @@ jobs:
     name: Upload to LinkedIn
     runs-on: ubuntu-latest
     needs: generate-banner
+    # Manual-trigger-only: the LINKEDIN_COOKIES secret has a real-world
+    # lifetime of ~2 days on this account, so a daily schedule cannot stay
+    # green without a manual cookie refresh roughly every 1-2 days anyway.
+    # Keep this as an on-demand fallback (gh workflow run / Actions UI)
+    # instead of a scheduled job that silently fails between refreshes.
+    if: github.event_name == 'workflow_dispatch'
     timeout-minutes: 15
 
     steps:
@@ -90,6 +96,14 @@ jobs:
 
       - name: Install Python dependencies
         run: pip install -r requirements.txt
+
+      # ── Cookie health check — MUST run before any Chrome/Xvfb setup so a
+      # stale cookie fails fast (~10s) instead of after minutes of environment
+      # setup that was always going to be wasted.
+      - name: Verify LinkedIn session is still valid
+        env:
+          LINKEDIN_COOKIES: ${{ secrets.LINKEDIN_COOKIES }}
+        run: python3 check_cookie_expiry.py
 
       # ── Optional: route traffic through your home machine's IP ──────────────
       # Set TAILSCALE_ENABLED to "true" in repository Variables to activate.
@@ -165,12 +179,6 @@ jobs:
           LINKEDIN_COOKIES: ${{ secrets.LINKEDIN_COOKIES }}
           DISPLAY: :99
         run: python3 upload_ci.py
-
-      # ── Cookie health check ──────────────────────────────────────────────────
-      - name: Verify LinkedIn session is still valid
-        env:
-          LINKEDIN_COOKIES: ${{ secrets.LINKEDIN_COOKIES }}
-        run: python3 check_cookie_expiry.py
 
       # ── Upload debug screenshots on failure ──────────────────────────────────
       - name: Upload debug screenshots

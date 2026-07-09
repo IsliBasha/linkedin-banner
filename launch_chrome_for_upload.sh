@@ -28,10 +28,11 @@ fi
 
 # ── Kill only the banner-Chrome if it's running without the debug port ────────
 # (Regular Chrome uses ~/.config/google-chrome — we never touch it.)
-if pgrep -f "user-data-dir.*linkedin-banner-chrome" >/dev/null 2>&1; then
+if pgrep -f "linkedin-banner-chrome" >/dev/null 2>&1; then
     echo "  → Restarting stale banner-Chrome…"
-    pkill -f "user-data-dir.*linkedin-banner-chrome" 2>/dev/null || true
+    pkill -f "linkedin-banner-chrome" 2>/dev/null || true
     sleep 2
+    pkill -9 -f "linkedin-banner-chrome" 2>/dev/null || true   # force-kill stragglers (e.g. crashpad handler ignoring SIGTERM)
 fi
 
 # ── Copy cookies via Python sqlite3 backup (safe while Chrome is open) ────────

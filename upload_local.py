@@ -47,22 +47,39 @@ _CROP_PATCH_JS = (REPO_DIR / "crop_patch.js").read_text()
 
 # ─────────────────────────────────────────────────────────────────────────────
 
-def pull_latest(attempts: int = 3, delay: int = 15) -> None:
+def pull_latest(attempts: int = 8, delay: int = 20, per_attempt_timeout: int = 15) -> None:
+    """Retry budget sized for a post-suspend network reconnect window.
+
+    Worst case: 8 * 15s (per-attempt timeout) + 7 * 20s (delay) =~ 260s (~4.3
+    min), vs. real-world NetworkManager reconnects of 5-60s — roughly 4x
+    headroom over the previous 45s budget, which produced unrecoverable
+    instant failures whenever a scheduled run landed right after the laptop
+    woke from suspend and DNS wasn't ready yet.
+    """
     print("  → Pulling latest banner from GitHub…")
     # banner.png is a generated binary — discard local modifications before pulling
     subprocess.run(["git", "restore", "banner.png"], cwd=REPO_DIR, capture_output=True)
     for attempt in range(1, attempts + 1):
-        result = subprocess.run(
-            ["git", "pull", "--ff-only"],
-            cwd=REPO_DIR, capture_output=True, text=True,
-        )
+        try:
+            result = subprocess.run(
+                ["git", "pull", "--ff-only"],
+                cwd=REPO_DIR, capture_output=True, text=True,
+                timeout=per_attempt_timeout,
+            )
+        except subprocess.TimeoutExpired:
+            print(f"     ⚠  attempt {attempt}/{attempts} timed out after {per_attempt_timeout}s "
+                  f"(network likely still down)")
+            if attempt < attempts:
+                time.sleep(delay)
+            continue
         if result.returncode == 0:
             print(f"     {result.stdout.strip() or 'Already up to date.'}")
             return
         print(f"     ⚠  attempt {attempt}/{attempts} failed: {result.stderr.strip()}")
         if attempt < attempts:
             time.sleep(delay)
-    sys.exit(f"✗  git pull failed after {attempts} attempts — upload skipped to avoid stale banner")
+    budget = attempts * per_attempt_timeout + (attempts - 1) * delay
+    sys.exit(f"✗  git pull failed after {attempts} attempts (~{budget}s budget) — upload skipped to avoid stale banner")
 
 
 def wait_for_cdp(timeout: int = 30) -> None:

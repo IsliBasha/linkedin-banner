@@ -35,5 +35,9 @@ StandardOutput=append:/home/lugat/.linkedin_banner.log
 StandardError=append:/home/lugat/.linkedin_banner.log
 
 # ── Limits ────────────────────────────────────────────────────────────────────
-# Allow up to 5 minutes for the full upload flow (CDN + save can take ~2 min)
-TimeoutStartSec=300
+# Allow up to 10 minutes: worst-case git-pull retry budget (~4.3 min, see
+# upload_local.py pull_latest()) + display-wait (~1 min) + upload flow itself
+# (up to ~3 min including LinkedIn's save-processing wait) can approach
+# 8-9 min in the worst case. TimeoutStartSec is cumulative across all
+# ExecStartPre + ExecStart steps for a oneshot service.
+TimeoutStartSec=600
