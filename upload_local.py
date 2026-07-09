@@ -322,12 +322,30 @@ def upload_banner(inject_cookies: list | None = None) -> None:
             ctx = browser.new_context()
             ctx.add_cookies(inject_cookies)
         else:
-            # Local mode: reuse the existing logged-in Chrome session
+            # Local mode: reuse the existing logged-in Chrome session, but
+            # explicitly (re-)inject cookies read directly from the real
+            # Chrome profile. li_at specifically does not reliably survive
+            # being loaded by Chrome from launch_chrome_for_upload.sh's
+            # copied Cookies database in the dedicated profile (confirmed:
+            # byte-identical on disk right after copy, but silently evicted
+            # from Chrome's live cookie store within seconds, while ~87 other
+            # cookies from the same copy load and persist fine) — injecting
+            # it directly over CDP sidesteps that instead of depending on
+            # Chrome to load it from disk.
             contexts = browser.contexts
             if not contexts:
                 browser.close()
                 sys.exit("✗  No browser context found — is LinkedIn open in Chrome?")
             ctx = contexts[0]
+
+            try:
+                from export_linkedin_cookies import read_chrome_cookies
+                real_cookies = read_chrome_cookies()
+            except Exception as exc:
+                real_cookies = []
+                print(f"     ⚠  could not read real Chrome cookies for injection: {exc}")
+            if real_cookies:
+                ctx.add_cookies(real_cookies)
 
         # ── Verify authenticated LinkedIn session ─────────────────────────────
         li_at  = next((c for c in ctx.cookies() if c["name"] == "li_at"),  None)

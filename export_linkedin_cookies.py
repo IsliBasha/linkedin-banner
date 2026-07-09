@@ -13,21 +13,19 @@ import json
 import sys
 
 
-def main() -> None:
-    try:
-        import browser_cookie3
-    except ImportError:
-        sys.exit("✗  Run: pip install browser-cookie3")
+def read_chrome_cookies() -> list[dict]:
+    """Read LinkedIn cookies directly from the local Chrome installation.
 
-    print("Reading LinkedIn cookies from Chrome…")
-    print("(Make sure Chrome is closed first)\n")
+    Pure function (no printing, no sys.exit) so it can be reused by both this
+    script's CLI and upload_local.py, which injects these cookies directly
+    over CDP rather than relying on Chrome to load them from a copied
+    Cookies database (li_at specifically does not reliably survive that path
+    in a freshly-launched dedicated profile).
+    """
+    import browser_cookie3
 
-    try:
-        jar = browser_cookie3.chrome(domain_name=".linkedin.com")
-    except Exception as e:
-        sys.exit(f"✗  Could not read Chrome cookies: {e}")
-
-    cookies = [
+    jar = browser_cookie3.chrome(domain_name=".linkedin.com")
+    return [
         {
             "name":     c.name,
             "value":    c.value,
@@ -39,6 +37,18 @@ def main() -> None:
         for c in jar
         if c.value
     ]
+
+
+def main() -> None:
+    print("Reading LinkedIn cookies from Chrome…")
+    print("(Make sure Chrome is closed first)\n")
+
+    try:
+        cookies = read_chrome_cookies()
+    except ImportError:
+        sys.exit("✗  Run: pip install browser-cookie3")
+    except Exception as e:
+        sys.exit(f"✗  Could not read Chrome cookies: {e}")
 
     if not cookies:
         sys.exit(
