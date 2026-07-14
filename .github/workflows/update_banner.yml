@@ -31,7 +31,7 @@ jobs:
 
       - name: Generate banner
         env:
-          GH_TOKEN:        ${{ secrets.GH_TOKEN }}
+          GH_TOKEN:        ${{ github.token }}
           GITHUB_USERNAME: ${{ secrets.GH_USERNAME }}
           PORTFOLIO_URL:   ${{ secrets.PORTFOLIO_URL }}
         run: python generate_banner.py
