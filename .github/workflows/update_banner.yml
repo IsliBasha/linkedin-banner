@@ -75,6 +75,28 @@ jobs:
     # green without a manual cookie refresh roughly every 1-2 days anyway.
     # Keep this as an on-demand fallback (gh workflow run / Actions UI)
     # instead of a scheduled job that silently fails between refreshes.
+    #
+    # KNOWN LIMITATION (2026-07-15, not planned to be fixed further):
+    # Tailscale routing (see the Connect to Tailscale / Route via home
+    # machine exit node steps below) does fix the original problem — it
+    # gets this job past linkedin.com/authwall by routing through a
+    # residential IP instead of GitHub's datacenter range. But it exposes a
+    # second, separate failure: cookies injected into a freshly-created,
+    # isolated browser context (this job's Chrome, cookies loaded only from
+    # the LINKEDIN_COOKIES secret) get soft-rejected by LinkedIn even when
+    # fresh — the page renders logged-out ("Join LinkedIn" / "Sign in")
+    # instead of the authenticated profile view. Reproduced locally with the
+    # exact same code path on a trusted IP (test_storage_state_repro.py),
+    # ruling out IP as the cause. Also tried restoring full Playwright
+    # storage_state (cookies + localStorage) into the fresh context — that
+    # made it *worse* (harder challenge tier), not better. Root cause is
+    # most likely a browser/device fingerprint or interaction-history signal
+    # that can't be captured and replayed by any export script; only a
+    # persistently-used real Chrome profile can pass this check. That's
+    # exactly what upload_local.py's default (non-CI) path already relies
+    # on, and it remains the reliable upload path — see
+    # systemd/linkedin-banner.service + .timer for the daily automation, and
+    # run_upload_now.sh for a one-click manual trigger.
     if: github.event_name == 'workflow_dispatch'
     timeout-minutes: 15
 

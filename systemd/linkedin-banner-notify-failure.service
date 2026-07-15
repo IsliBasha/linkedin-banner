@@ -1,0 +1,9 @@
+[Unit]
+Description=Desktop notification for a failed LinkedIn banner upload
+
+[Service]
+Type=oneshot
+Environment=DISPLAY=:0
+Environment=HOME=/home/lugat
+Environment=XAUTHORITY=/home/lugat/.Xauthority
+ExecStart=/bin/bash /home/lugat/Documents/linkedin-banner/systemd/notify-failure.sh
