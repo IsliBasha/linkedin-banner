@@ -2,8 +2,11 @@
 Description=Daily LinkedIn banner upload (08:45 CEST)
 
 [Timer]
-# 08:45 local time — GitHub Actions commits the new banner at ~06:05 UTC
-# (08:05 CEST), so 08:45 gives plenty of buffer.
+# 08:45 local time. The GitHub Actions cron is 06:00 UTC (08:00 CEST) but
+# GitHub runs scheduled workflows up to ~2 h late (observed 2026-07-15/16),
+# so the day's banner commit often does NOT exist yet at trigger time.
+# The service handles that: POLL_FOR_NEW_BANNER=1 makes upload_local.py
+# poll git for up to 2 h until the new banner lands before uploading.
 OnCalendar=*-*-* 08:45:00
 
 # Persistent=true: if the machine was off at 08:45, the job runs on next login.

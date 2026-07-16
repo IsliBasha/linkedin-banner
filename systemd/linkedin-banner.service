@@ -21,6 +21,13 @@ Type=oneshot
 Environment=DISPLAY=:0
 Environment=HOME=/home/lugat
 Environment=XAUTHORITY=/home/lugat/.Xauthority
+# POLL_FOR_NEW_BANNER: GitHub runs the 06:00 UTC generation cron up to ~2 h
+# late (observed 2026-07-16: both daily runs re-uploaded a pixel-identical
+# stale banner because the commit didn't exist yet at trigger time). With
+# this set, upload_local.py polls git every 5 min for up to 2 h until the
+# day's banner actually lands, instead of racing the delayed cron.
+# Interactive runs (run_upload_now.sh) leave this unset and fail fast.
+Environment=POLL_FOR_NEW_BANNER=1
 
 WorkingDirectory=/home/lugat/Documents/linkedin-banner
 
@@ -38,9 +45,9 @@ StandardOutput=append:/home/lugat/.linkedin_banner.log
 StandardError=append:/home/lugat/.linkedin_banner.log
 
 # ── Limits ────────────────────────────────────────────────────────────────────
-# Allow up to 10 minutes: worst-case git-pull retry budget (~4.3 min, see
-# upload_local.py pull_latest()) + display-wait (~1 min) + upload flow itself
-# (up to ~3 min including LinkedIn's save-processing wait) can approach
-# 8-9 min in the worst case. TimeoutStartSec is cumulative across all
-# ExecStartPre + ExecStart steps for a oneshot service.
-TimeoutStartSec=600
+# Worst case: poll-for-new-banner budget (2 h, POLL_BUDGET_S in
+# upload_local.py) + git-pull retry budget (~4.3 min, pull_latest()) +
+# display-wait (~1 min) + upload flow (~3 min including LinkedIn's
+# save-processing wait). TimeoutStartSec is cumulative across all
+# ExecStartPre + ExecStart steps for a oneshot service, so 2 h 20 min.
+TimeoutStartSec=8400

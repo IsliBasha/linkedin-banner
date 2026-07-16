@@ -9,6 +9,9 @@ venv/
 .env
 secrets.txt
 
+# Machine-local upload state — hash of the last banner this machine uploaded
+.last_uploaded_banner.sha256
+
 # Debug/diagnostic screenshots and request captures from upload_local.py
 debug_*.png
 debug_*.json

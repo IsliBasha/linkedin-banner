@@ -22,6 +22,7 @@ CRON (daily at 07:00 — Chrome opened automatically)
 from __future__ import annotations
 
 import datetime
+import hashlib
 import json as _json
 import os
 import subprocess
@@ -38,6 +39,18 @@ REPO_DIR    = Path(__file__).parent.resolve()
 BANNER_PATH = REPO_DIR / "banner.png"
 PROFILE_URL = os.getenv("LINKEDIN_PROFILE_URL", "https://www.linkedin.com/in/islibasha/")
 CDP_PORT    = 9222
+
+# Hash of the last banner this machine successfully uploaded (untracked local
+# state). Guards against re-uploading a pixel-identical banner: on 2026-07-16
+# both daily runs "succeeded" while visibly changing nothing because GitHub
+# ran the 06:00 UTC generation cron ~2 h late and banner.png was still
+# yesterday's image at upload time.
+LAST_UPLOADED_STATE = REPO_DIR / ".last_uploaded_banner.sha256"
+
+# GitHub executes scheduled workflows late under load (observed ~2 h past the
+# 06:00 UTC cron), so the systemd timer polls rather than racing the commit.
+POLL_INTERVAL_S = 300     # git pull retry cadence while waiting
+POLL_BUDGET_S   = 7200    # give the delayed cron up to 2 h to commit
 
 # JS fetch interceptor — clamps floating-point crop coordinates before the
 # saveProfileBackgroundImage request fires.  Lives in crop_patch.js so it can
@@ -80,6 +93,68 @@ def pull_latest(attempts: int = 8, delay: int = 20, per_attempt_timeout: int = 1
             time.sleep(delay)
     budget = attempts * per_attempt_timeout + (attempts - 1) * delay
     sys.exit(f"✗  git pull failed after {attempts} attempts (~{budget}s budget) — upload skipped to avoid stale banner")
+
+
+def banner_sha256(path: Path | None = None) -> str:
+    """Content hash of the banner image (defaults resolved at call time)."""
+    path = path if path is not None else BANNER_PATH
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def is_banner_unchanged(path: Path | None = None, state_file: Path | None = None) -> bool:
+    """True when banner.png is byte-identical to the last uploaded banner."""
+    state_file = state_file if state_file is not None else LAST_UPLOADED_STATE
+    try:
+        last = state_file.read_text().strip()
+    except FileNotFoundError:
+        return False
+    return bool(last) and last == banner_sha256(path)
+
+
+def record_uploaded_banner(path: Path | None = None, state_file: Path | None = None) -> None:
+    """Persist the hash of a successfully uploaded banner."""
+    state_file = state_file if state_file is not None else LAST_UPLOADED_STATE
+    state_file.write_text(banner_sha256(path) + "\n")
+
+
+def wait_for_new_banner(
+    *,
+    budget_s: int = POLL_BUDGET_S,
+    interval_s: int = POLL_INTERVAL_S,
+    pull_fn=pull_latest,
+    unchanged_fn=is_banner_unchanged,
+    sleep_fn=time.sleep,
+    monotonic_fn=time.monotonic,
+) -> bool:
+    """Poll git until banner.png differs from the last uploaded banner.
+
+    Returns True as soon as a new banner is present, False once the budget
+    elapses without one.
+    """
+    deadline = monotonic_fn() + budget_s
+    while monotonic_fn() < deadline:
+        remaining = deadline - monotonic_fn()
+        print(f"  ⏳ Banner unchanged — waiting {interval_s}s for GitHub Actions "
+              f"to commit today's banner ({int(remaining)}s left in budget)…")
+        sleep_fn(min(interval_s, remaining))
+        pull_fn()
+        if not unchanged_fn():
+            print("  ✓ New banner arrived.")
+            return True
+    return False
+
+
+def save_wait_warning(exc: BaseException) -> str:
+    """Log line for a failed save-response wait.
+
+    Only a genuine Playwright TimeoutError means the full 180 s elapsed; any
+    other exception aborted the wait early and must surface its real cause
+    (a bare "timed out" label hid the actual error on 2026-07-16).
+    """
+    from playwright.sync_api import TimeoutError as PWTimeout
+    if isinstance(exc, PWTimeout):
+        return "⚠  Save response not received within 180 s"
+    return f"⚠  Save-response wait aborted early ({type(exc).__name__}: {exc})"
 
 
 def wait_for_cdp(timeout: int = 30) -> None:
@@ -535,8 +610,8 @@ def upload_banner(inject_cookies: list | None = None) -> None:
                     lambda r: "saveProfileBackgroundImage" in r.url,
                     timeout=180_000,
                 )
-            except Exception:
-                print("     ⚠  Save response not received within 180 s")
+            except Exception as exc:
+                print(f"     {save_wait_warning(exc)}")
                 page.wait_for_timeout(5_000)
 
             page.screenshot(path=str(REPO_DIR / "debug_05_after_apply.png"))
@@ -603,14 +678,38 @@ def upload_banner(inject_cookies: list | None = None) -> None:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def main() -> None:
+    force = "--force" in sys.argv[1:]
     print(f"\n🖼   LinkedIn Banner Uploader — {datetime.date.today()}")
 
     if not BANNER_PATH.exists():
         sys.exit(f"✗  banner.png not found at {BANNER_PATH}")
 
     pull_latest()
+
+    if not force and is_banner_unchanged():
+        if os.getenv("POLL_FOR_NEW_BANNER") == "1":
+            # Timer path: GitHub's 06:00 UTC cron runs up to ~2 h late, so
+            # wait for the day's commit instead of racing it.
+            if not wait_for_new_banner():
+                sys.exit(
+                    "✗  banner.png is still identical to the last uploaded banner — "
+                    f"no new commit arrived within {POLL_BUDGET_S // 60} min. "
+                    "GitHub Actions has not generated today's banner; upload skipped "
+                    "(re-uploading an identical image changes nothing). Check "
+                    "https://github.com/IsliBasha/linkedin-banner/actions"
+                )
+        else:
+            # Interactive path: fail fast with the real story instead of
+            # "succeeding" without any visible effect.
+            sys.exit(
+                "✗  banner.png is identical to the last uploaded banner — GitHub "
+                "Actions has not committed today's banner yet, so uploading would "
+                "change nothing visible. Re-run later, or pass --force to upload anyway."
+            )
+
     wait_for_cdp()
     upload_banner()
+    record_uploaded_banner()
     print("\n✅  Done.")
 
 
