@@ -134,6 +134,58 @@ def test_wait_for_new_banner_sleeps_interval_between_pulls():
     assert clock.sleeps == [300, 300, 300]
 
 
+# ── Bounded wait for the save response ────────────────────────────────────────
+# Discovered during the 2026-07-16 fix verification: this Playwright version's
+# sync Page has no wait_for_response attribute, so the old "wait up to 180 s"
+# call raised AttributeError instantly on every run — the wait never happened.
+
+def test_wait_until_returns_true_without_ticking_when_condition_already_met():
+    ticks: list[int] = []
+
+    result = ul.wait_until(
+        lambda: True,
+        timeout_s=10,
+        tick_fn=lambda: ticks.append(1),
+        monotonic_fn=lambda: 0.0,
+    )
+
+    assert result is True
+    assert ticks == []
+
+
+def test_wait_until_ticks_until_condition_becomes_true():
+    clock = FakeClock()
+    state = {"ticks": 0}
+
+    def tick() -> None:
+        state["ticks"] += 1
+        clock.sleep(1)
+
+    result = ul.wait_until(
+        lambda: state["ticks"] >= 3,
+        timeout_s=10,
+        tick_fn=tick,
+        monotonic_fn=clock.monotonic,
+    )
+
+    assert result is True
+    assert state["ticks"] == 3
+
+
+def test_wait_until_returns_false_once_timeout_elapses():
+    clock = FakeClock()
+
+    result = ul.wait_until(
+        lambda: False,
+        timeout_s=5,
+        tick_fn=lambda: clock.sleep(1),
+        monotonic_fn=clock.monotonic,
+    )
+
+    assert result is False
+    assert clock.now >= 5
+
+
 # ── Save-wait warning label ───────────────────────────────────────────────────
 
 def test_save_wait_warning_reports_real_timeout_as_180s():
