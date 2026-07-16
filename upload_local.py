@@ -144,6 +144,22 @@ def wait_for_new_banner(
     return False
 
 
+def wait_until(condition_fn, *, timeout_s: float, tick_fn, monotonic_fn=time.monotonic) -> bool:
+    """Poll condition_fn until it is true or timeout_s elapses.
+
+    tick_fn runs between polls (e.g. page.wait_for_timeout to keep pumping
+    Playwright events). Exists because this Playwright version's sync Page
+    has no wait_for_response — the old call raised AttributeError instantly
+    on every run, so the intended 180 s save wait never actually happened.
+    """
+    deadline = monotonic_fn() + timeout_s
+    while monotonic_fn() < deadline:
+        if condition_fn():
+            return True
+        tick_fn()
+    return condition_fn()
+
+
 def save_wait_warning(exc: BaseException) -> str:
     """Log line for a failed save-response wait.
 
@@ -605,13 +621,19 @@ def upload_banner(inject_cookies: list | None = None) -> None:
 
             page.on("response", _on_save_response)
 
+            # _on_save_response (registered above) fills save_http_status when
+            # the saveProfileBackgroundImage response lands; poll for it.
             try:
-                page.wait_for_response(
-                    lambda r: "saveProfileBackgroundImage" in r.url,
-                    timeout=180_000,
+                got_save_response = wait_until(
+                    lambda: save_http_status[0] != 0,
+                    timeout_s=180,
+                    tick_fn=lambda: page.wait_for_timeout(1_000),
                 )
             except Exception as exc:
                 print(f"     {save_wait_warning(exc)}")
+                got_save_response = False
+            if not got_save_response:
+                print("     ⚠  Save response not received within 180 s")
                 page.wait_for_timeout(5_000)
 
             page.screenshot(path=str(REPO_DIR / "debug_05_after_apply.png"))
