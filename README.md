@@ -182,6 +182,88 @@ The workflow also runs automatically every day at 00:00 UTC.
 
 ---
 
+## Daily upload on macOS (launchd)
+
+The upload half runs on your own machine, from a dedicated Chrome profile that
+stays logged in to LinkedIn. Cookies replayed into a fresh cloud browser get
+soft-rejected regardless of how new they are, so `upload-banner` in the
+workflow is a manual fallback and this is the path that actually runs daily.
+
+```bash
+brew install --cask google-chrome
+git clone https://github.com/IsliBasha/linkedin-banner.git ~/src/linkedin-banner
+cd ~/src/linkedin-banner
+python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+launchd/install.sh
+```
+
+Not `~/Documents` — macOS TCC blocks launchd agents there, and a scheduled run
+dies on its first read with `Operation not permitted` (verified 2026-09-01).
+`install.sh` refuses to install from `~/Documents`, `~/Desktop` or
+`~/Downloads` for that reason.
+
+`install.sh` copies `launchd/com.islibasha.linkedin-banner.plist` into
+`~/Library/LaunchAgents`, bootstraps it into your GUI session, and drops a
+double-clickable shortcut on the Desktop. It is idempotent — re-run it after
+any pull that changes the plist.
+
+Then log in **once**:
+
+```bash
+./launch_chrome_for_upload.sh     # opens the banner-Chrome window
+```
+
+Log in to LinkedIn in that window and close nothing else. That profile
+(`~/.config/linkedin-banner-chrome`) is the persistent session from then on —
+LinkedIn's `li_at` cookie lasts about 12 months, and no other Chrome is
+involved. The profile is also what keeps remote debugging available at all:
+Chrome ≥ 136 refuses `--remote-debugging-port` on the default profile.
+
+Verify:
+
+```bash
+.venv/bin/python3 doctor.py       # plist parity, job state, last exit, session
+./run_upload_now.sh               # or double-click run_upload_now.command
+```
+
+A failed scheduled run reports itself as a macOS notification — the only thing
+that will tell you the upload stopped working. `install.sh` posts a test
+notification for exactly that reason; if none appears, enable **Script Editor**
+under System Settings → Notifications and re-run it.
+
+### Why 21:00
+
+The generation workflow's cron is `0 6 * * *`, but GitHub runs scheduled
+workflows late under load — observed finishing at 10:54, 12:20, 10:59, 12:03,
+17:57 and 17:11 UTC on 27 Aug – 1 Sep 2026, i.e. 5–12 h behind schedule. The
+old 08:45 slot plus a 2 h poll budget expired before the day's banner existed
+on most of those days, so the run no-opped. 21:00 local sits after every
+observed landing time.
+
+If the Mac is **asleep** at 21:00, launchd replays the missed slot on wake. If
+it was **powered off**, that slot is skipped altogether — launchd does not
+replay it, unlike `Persistent=true` on the retired systemd timer. The next
+21:00 catches up, and re-running is safe: the uploader refuses to re-upload a
+banner byte-identical to the last one it uploaded.
+
+A run is capped at 8400 s of wall clock, the same budget systemd enforced with
+`TimeoutStartSec=8400`. The cap is the wrapper's, not the uploader's: the
+uploader measures its 2 h poll with `time.monotonic()`, which stops while the
+Mac sleeps, so a run whose lid closes mid-poll would otherwise live for days
+while launchd skips every later 21:00.
+
+### Where things are
+
+| Path | What |
+|---|---|
+| `launchd/com.islibasha.linkedin-banner.plist` | the agent: 21:00 daily, env, log paths |
+| `launchd/run_scheduled.sh` | Chrome → wait → upload; 8400 s wall-clock cap; dated run markers; failure notification |
+| `launchd/install.sh` | idempotent installer |
+| `~/.linkedin_banner.log` | appended run log (`run start` / `run finish exit=N`) |
+| `systemd/` | the retired Linux path — kept for reference, not installed since 2026-09-01 |
+
+---
+
 ## Customisation
 
 All visual constants live at the top of `generate_banner.py`:

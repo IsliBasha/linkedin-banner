@@ -1,0 +1,91 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+    Daily LinkedIn banner upload (macOS replacement for
+    systemd/linkedin-banner.{service,timer}, retired 2026-09-01).
+
+    Paths are absolute on purpose: launchd expands no tilde and reads no login
+    shell, so every path is written out in full, exactly as the systemd units
+    hardcoded the Linux home. launchd/install.sh refuses to install this file if
+    these paths do not match the checkout it runs from.
+
+    The checkout lives in src, NOT in Documents: macOS TCC withholds Documents
+    from a LaunchAgent, and a run from there fails with "Operation not
+    permitted" on the first read (measured 2026-09-01 through a throwaway agent).
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.islibasha.linkedin-banner</string>
+
+    <!-- The wrapper runs the same sequence the systemd service did:
+         launch/verify the CDP Chrome, wait for LinkedIn to load, upload. -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>/Users/islibasha/src/linkedin-banner/launchd/run_scheduled.sh</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/islibasha/src/linkedin-banner</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <!-- A launchd agent starts with PATH=/usr/bin:/bin:/usr/sbin:/sbin,
+             which misses Homebrew - and with it the python3 the launcher's
+             cookie step uses. -->
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <!-- GitHub runs the 06:00 UTC generation cron hours late (5-12 h
+             observed Aug 27 - Sep 1 2026), so the scheduled run polls git for
+             the day's banner instead of racing the commit. Interactive runs
+             (run_upload_now.sh) leave this unset and fail fast. -->
+        <key>POLL_FOR_NEW_BANNER</key>
+        <string>1</string>
+        <!-- The uploader prints check marks and arrows; without a UTF-8 locale
+             those writes raise UnicodeEncodeError under launchd. -->
+        <key>LANG</key>
+        <string>en_US.UTF-8</string>
+    </dict>
+
+    <!-- 21:00 local. Late enough that GitHub's delayed generation cron has
+         almost always committed the day's banner by then; the old 08:45 slot
+         would no-op on most days now. A slot missed because the Mac was asleep
+         is replayed on wake; a slot missed because it was powered off is
+         skipped, and the next 21:00 catches up. -->
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>21</integer>
+        <key>Minute</key>
+        <integer>0</integer>
+    </dict>
+
+    <!-- No RunAtLoad: installing or reloading the agent must not fire an
+         upload. launchd has no TimeoutStartSec equivalent either, and the
+         uploader's own poll budget is NOT one - it is measured with
+         time.monotonic(), which stops while the Mac sleeps (136.8 h of this
+         machine's last 197 h since boot). A run whose lid closes mid-poll would
+         otherwise live for days while launchd skips every later 21:00, so
+         run_scheduled.sh enforces an 8400 s WALL-CLOCK cap instead. -->
+
+    <!-- launchd SIGKILLs whatever is left in the job's process group when the
+         job exits; that group contains the banner-Chrome, which would be
+         killed hard after every run with an unflushed profile (systemd sent
+         SIGTERM). The wrapper owns Chrome's lifecycle and stops it politely. -->
+    <key>AbandonProcessGroup</key>
+    <true/>
+
+    <!-- 0o077: the run log carries error text and a truncated JSESSIONID. -->
+    <key>Umask</key>
+    <integer>63</integer>
+
+    <!-- launchd APPENDS to these, so the log is a running history. The
+         wrapper's dated "run start" / "run finish exit=N" markers land here and
+         are what doctor.py counts failures from (there is no journal). -->
+    <key>StandardOutPath</key>
+    <string>/Users/islibasha/.linkedin_banner.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/islibasha/.linkedin_banner.log</string>
+</dict>
+</plist>
