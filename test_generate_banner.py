@@ -182,3 +182,41 @@ class TestContributionGrid:
             f"Grid would extend to x={grid_x0 + grid_width}, "
             f"beyond divider at x={gb.DIV2_X}"
         )
+
+
+# ── Hero number source ───────────────────────────────────────────────────────
+# GitHub's totalCommitContributions only counts repos the calling token can see,
+# and the Actions token sees public repos only — the number froze at 595 on
+# 2026-09-07 while every commit since went to private repos. The calendar total
+# is what the public profile shows (private days included), so it is the source.
+
+class _FakeResp:
+    def __init__(self, body):
+        self._body = body
+
+    def raise_for_status(self):
+        pass
+
+    def json(self):
+        return self._body
+
+
+def test_fetch_contributions_uses_calendar_total_not_public_commit_count(monkeypatch):
+    weeks = [{"contributionDays": [{"contributionCount": 3, "date": "2026-10-13"}]}]
+    body = {"data": {"user": {"contributionsCollection": {
+        "totalCommitContributions": 595,
+        "contributionCalendar": {"totalContributions": 1427, "weeks": weeks},
+    }}}}
+    monkeypatch.setattr(gb, "GITHUB_USERNAME", "IsliBasha")
+    monkeypatch.setattr(gb.requests, "post", lambda *a, **kw: _FakeResp(body))
+
+    total, got_weeks = gb.fetch_contributions()
+
+    assert total == 1427
+    assert got_weeks == weeks
+
+
+def test_hero_label_says_contributions_not_commits():
+    src = open(gb.__file__, encoding="utf-8").read()
+    assert "// contributions · 12mo" in src
+    assert "// commits · 12mo" not in src

@@ -49,7 +49,7 @@ GRID_TOP_Y:   int = 54     # y where the grid cells begin (header sits above thi
 # ── Font sizes — calibrated for readability at ~52% viewport scale ──
 # At 1584→830px render scale, multiply by 0.52 for effective px.
 # Targets: labels ≥ 11px effective → 20px canvas; numbers ≥ 27px effective.
-FONT_LABEL_SIZE:    int = 20   # section labels / captions (// commits · 12mo)
+FONT_LABEL_SIZE:    int = 20   # section labels / captions (// contributions · 12mo)
 FONT_NUMBER_SIZE:   int = 56   # hero stat numbers  (e.g. 1,284)
 FONT_LEGEND_SIZE:   int = 18   # language legend items
 FONT_GRID_HDR_SIZE: int = 18   # contribution grid header
@@ -179,8 +179,7 @@ def fetch_contributions() -> tuple[int, list[dict]]:
     query($login: String!, $from: DateTime!, $to: DateTime!) {
       user(login: $login) {
         contributionsCollection(from: $from, to: $to) {
-          totalCommitContributions
-          contributionCalendar { weeks { contributionDays { contributionCount date } } }
+          contributionCalendar { totalContributions weeks { contributionDays { contributionCount date } } }
         }
       }
     }
@@ -199,8 +198,11 @@ def fetch_contributions() -> tuple[int, list[dict]]:
     body = resp.json()
     if "errors" in body:
         raise RuntimeError(f"GitHub GraphQL error: {body['errors']}")
-    collection = body["data"]["user"]["contributionsCollection"]
-    return collection["totalCommitContributions"], collection["contributionCalendar"]["weeks"]
+    # totalContributions is what the public profile shows, private days included.
+    # totalCommitContributions only counts repos the token can see, and the
+    # Actions token sees public repos only — it froze at 595 on 2026-09-07.
+    calendar = body["data"]["user"]["contributionsCollection"]["contributionCalendar"]
+    return calendar["totalContributions"], calendar["weeks"]
 
 
 def fetch_top_languages(max_repos: int = 25) -> list[tuple[str, float]]:
@@ -287,7 +289,7 @@ def _draw_center(
     """
     Stats section — RIGHT half (x: CONTENT_LEFT_X → BANNER_W - pad):
 
-      // commits · 12mo
+      // contributions · 12mo
       1,284                 ← large green number
 
       ─────────────────
@@ -309,7 +311,7 @@ def _draw_center(
     leg_font = load_font("Regular", FONT_LEGEND_SIZE)
 
     # Section label + hero number
-    draw.text((left_x, top_y), "// commits · 12mo", font=lbl_font, fill=TEXT_DIM)
+    draw.text((left_x, top_y), "// contributions · 12mo", font=lbl_font, fill=TEXT_DIM)
     draw.text((left_x, top_y + FONT_LABEL_SIZE + 4), f"{total_commits:,}", font=num_font, fill=ACCENT_GRN)
 
     # Horizontal rule
@@ -436,7 +438,7 @@ def main() -> None:
     total_commits, weeks = fetch_contributions()
     top_langs            = fetch_top_languages()
 
-    print(f"    Commits (12 mo):           {total_commits:,}")
+    print(f"    Contributions (12 mo):     {total_commits:,}")
     print(f"    Top languages:             {', '.join(n for n, _ in top_langs)}")
     print(f"    Contribution weeks loaded: {len(weeks)}")
 

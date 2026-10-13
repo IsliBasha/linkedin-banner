@@ -6,7 +6,7 @@ and uploads it as your profile background photo — refreshed every day by GitHu
 ```
 ┌──────────────────┬──────────────────────────┬─────────────────────────────────────────┐
 │                  │                          │                                          │
-│  PORTFOLIO       │  COMMITS  ·  12 MONTHS   │  CONTRIBUTIONS  ·  PAST 12 MONTHS       │
+│  PORTFOLIO       │ CONTRIBUTIONS · 12 MONTHS│  CONTRIBUTIONS  ·  PAST 12 MONTHS       │
 │                  │                          │  ░░▓▓████▓░░░▓▓███░░▓▓████▓░░ …         │
 │  yoursite.dev    │  1,284                   │  ░░░░▓▓██░░░▓▓███░░░░▓▓████░░ …         │
 │  ─────────────   │                          │  ░▓▓▓▓███▓░░░░▓░░░▓▓▓███▓░░░░ …         │
@@ -22,7 +22,7 @@ and uploads it as your profile background photo — refreshed every day by GitHu
 ## Features
 
 - **Left** — portfolio URL in clean typographic style
-- **Center** — total commits (12-month window) + top-3 language progress bars
+- **Center** — total contributions (12-month window, private repos included) + top-3 language progress bars
 - **Right** — full-year GitHub contribution grid (52 × 7 cells, GitHub colour scale)
 - **Auto-font**: downloads Inter from the official source if not present locally
 - **Auto-upload**: three-step LinkedIn Assets API (register → binary PUT → profile PATCH)
